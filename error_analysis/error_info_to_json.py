@@ -5,6 +5,7 @@ OUT = "./error-info.json"
 
 def main():
     errors = []
+    n = 1
     with open(IN) as f:
         lines = f.readlines()
         i = 0
@@ -13,11 +14,13 @@ def main():
             description = lines[i+1].strip()
             fmt = lines[i+2].strip()
             errors.append({
+                "id": n,
                 "source": source,
                 "description": description,
                 "format": fmt,
             })
             i += 3
+            n += 1
 
     with open(OUT, "w") as f:
         json.dump(errors, f, indent=4)

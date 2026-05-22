@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import json
 import csv
@@ -18,14 +18,18 @@ REJOIN_ID = "organization:f08e188e-2316-4668-ae2c-8a20dc88502f"
 SODA_CSV = "./identifiers_for_soda_processed_datasets_marked_as_published.csv"
 
 IN = "/Volumes/Extreme SSD/sparc-cassava-raw/"
-FULL_REPORT_OUT = "./temporal_report.json"
-DROPPED_ERRORS_OUT = "./dropped_errors.txt"
-PATH_ERROR_OUT = "./path_errors.txt"
 MAX_CONCURRENCY = 512
 SAMPLE = -1 # -1 to process all datasets
 
 
+def parse_export_timestamp(timestamp: str) -> int:
+        normalized = timestamp.rstrip("Z").replace(",", ".")
+        return int(datetime.fromisoformat(normalized).timestamp())
+
 class Reporter:
+    def filter(self, filename: str) -> bool:
+        return True
+    
     @abstractmethod
     def handle(self, file_data: dict):
         raise NotImplementedError
@@ -34,8 +38,13 @@ class Reporter:
     def finish(self):
         raise NotImplementedError
 
-async def process_file(filename):
+async def process_file(filename, reporters: list[Reporter]) -> tuple[str, list[Reporter]] | None:
     if filename.startswith("._") or not filename.endswith(".json"):
+        return None
+    
+    target_reporters = [reporter for reporter in reporters if reporter.filter(filename)]
+    
+    if not target_reporters:
         return None
 
     file_path = os.path.join(IN, filename)
@@ -43,10 +52,15 @@ async def process_file(filename):
         raw = await f.read()
     data = await asyncio.to_thread(json.loads, raw)
     
-    return data
+    return (data, target_reporters)
 
 async def main(reporters: list[Reporter]):
+    if not reporters:
+        print("No reporters to process")
+        return
+    
     files = [file for file in os.listdir(IN) if file.endswith(".json") and not file.startswith("._")]
+    files = [file for file in files if any([reporter.filter(file) for reporter in reporters])]
     if SAMPLE > 0:
         print(f"Sampling {SAMPLE}/{len(files)} files")
         shuffle(files)
@@ -55,7 +69,7 @@ async def main(reporters: list[Reporter]):
     file_iter = iter(files)
     
     for _ in range(min(MAX_CONCURRENCY, len(files))):
-        pending.add(asyncio.create_task(process_file(next(file_iter))))
+        pending.add(asyncio.create_task(process_file(next(file_iter), reporters)))
 
     with tqdm(total=len(files), desc="Processing files") as pbar:
         while pending:
@@ -63,15 +77,17 @@ async def main(reporters: list[Reporter]):
             for task in done:
                 id = "<unknown>"
                 try:
-                    for reporter in reporters:
-                        reporter.handle(task.result())
+                    result = task.result()
+                    if result is not None:
+                        for reporter in result[1]:
+                            reporter.handle(result[0])
                 except Exception as e:
                     print(f"Error processing dataset {id}: {e}")
                     traceback.print_exc()
                 pbar.update(1)
 
                 try:
-                    pending.add(asyncio.create_task(process_file(next(file_iter))))
+                    pending.add(asyncio.create_task(process_file(next(file_iter), reporters)))
                 except StopIteration:
                     pass
         
@@ -82,15 +98,15 @@ class TemporalReporter(Reporter):
     @dataclass
     class DatasetReport:
         id: str
-        status_counts: Counter
-        first_requested_url: str | None
-        first_requested_timestamp: int | None
-        error_graph: dict[int, Counter]
-        dropped_errors: int
-        is_precision: bool
-        is_sparc: bool
-        is_rejoin: bool
-        uses_soda: bool
+        status_counts: Counter = field(default_factory=Counter)
+        first_requested_url: str | None = None
+        first_requested_timestamp: int | None = None
+        error_graph: dict[int, Counter] = field(default_factory=lambda: defaultdict(Counter))
+        dropped_errors: int = 1
+        is_precision: bool = False
+        is_sparc: bool = False
+        is_rejoin: bool = False
+        uses_soda: bool = False
         
         def to_json_dict(self) -> dict:
             return {
@@ -106,44 +122,26 @@ class TemporalReporter(Reporter):
                 "uses_soda": self.uses_soda,
             }
     
-    def _load_soda_ids(self, csv_path: str) -> set[str]:
-        soda_ids: set[str] = set()
-        with open(csv_path, "r", encoding="utf-8", newline="") as f:
+    def __init__(self, out_path: str, dropped_out_path: str):
+        self.reports: dict[str, TemporalReporter.DatasetReport] = {}
+        self.dropped_error_file = open(dropped_out_path, "w")
+        self.soda_ids: set[str] = set()
+        self.out_path = out_path
+        self.dropped_out_path = dropped_out_path
+        
+        with open(SODA_CSV, "r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 dataset_id = row.get("N:dataset")
                 if dataset_id:
-                    soda_ids.add(dataset_id)
-        return soda_ids
-
-    def _parse_export_timestamp(self, timestamp: str) -> int:
-        normalized = timestamp.rstrip("Z").replace(",", ".")
-        return int(datetime.fromisoformat(normalized).timestamp())
-    
-    def __init__(self, out_path: str, dropped_out_path: str):
-        self.reports: dict[str, TemporalReporter.DatasetReport] = {}
-        self.soda_ids = self._load_soda_ids(SODA_CSV)
-        self.dropped_error_file = open(dropped_out_path, "w")
-        self.out_path = out_path
-        self.dropped_out_path = dropped_out_path
+                    self.soda_ids.add(dataset_id)
     
     def handle(self, file_data: dict):
         result = file_data
         id = result["id"]
         report = self.reports.get(id, None)
         if not report:
-            report = TemporalReporter.DatasetReport(
-                id=id,
-                status_counts=Counter(),
-                first_requested_url=None,
-                first_requested_timestamp=None,
-                error_graph=defaultdict(Counter),
-                dropped_errors=0,
-                is_precision=False,
-                is_sparc=False,
-                is_rejoin=False,
-                uses_soda=False
-            )
+            report = TemporalReporter.DatasetReport(id=id)
             self.reports[id] = report
 
         inputs = result.get("inputs", {})
@@ -152,7 +150,7 @@ class TemporalReporter(Reporter):
         
         # format: 2023-05-10T20:49:41,892885Z
         timestamp = result["prov"]["timestamp_export_start"]
-        unix_timestamp = self._parse_export_timestamp(timestamp)
+        unix_timestamp = parse_export_timestamp(timestamp)
         
         if status == "requested":
             dataset_uuid = id.split(":")[2]
@@ -179,7 +177,7 @@ class TemporalReporter(Reporter):
                 if isinstance(err, list):
                     collect(err)
                 elif isinstance(err, str):
-                    err = {"message": err}
+                    json_errors.add(err)
                 elif isinstance(err, dict):
                     if message := err.get("message"):
                         json_errors.add(message)
@@ -187,8 +185,10 @@ class TemporalReporter(Reporter):
         collect(result.get("errors", []))
         collect(result.get("status", {}).get("submission_errors", []))
         collect(result.get("status", {}).get("curation_errors", []))
+        
         for item in result.get("status", {}).get("path_error_report", {}).values():
             collect(item.get("messages", []))
+        
         if inputs:
             for key, item in inputs.items():
                 if key == "manifest_file":
@@ -249,9 +249,89 @@ class PathErrorReporter(Reporter):
         
         print(f"Dropped {self.dropped_files} files with no curation errors")
 
+class UrlIdentifierReporter(Reporter):
+    def __init__(self, out_path: str):
+        self.latest_reports = {}
+        self.target_ids = []
+        self.out_path = out_path
+        
+        with open("./protocol_target_ids.csv", "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                self.target_ids.append(row[0].split(":")[2])
+    
+    def filter(self, filename: str) -> bool:
+        return any([i in filename for i in self.target_ids])
+    
+    def handle(self, file_data: dict):
+        id = file_data["id"]
+        
+        if id in self.latest_reports:
+            existing_timestamp = self.latest_reports[id]["prov"]["timestamp_export_start"]
+            new_timestamp = file_data["prov"]["timestamp_export_start"]
+            if parse_export_timestamp(new_timestamp) > parse_export_timestamp(existing_timestamp):
+                self.latest_reports[id] = file_data
+        else:
+            self.latest_reports[id] = file_data
+    
+    def finish(self):
+        with open(self.out_path, "w") as f:
+            f.write("Type, Protocol Name, Dataset ID, URL/Path\n")
+            for id, report in self.latest_reports.items():
+                for relation in report.get("meta", {}).get("related_identifiers", []):
+                    identifier_type = relation.get("related_identifier_type")
+                    if relation.get("relation_type") == "HasProtocol":
+                        if identifier_type == "local-path":
+                            name = ""
+                            url = relation.get("related_identifier", "<missing local path>")
+                            typ = "local-path"
+                        elif identifier_type == "DOI":
+                            ri = relation.get("related_identifier", {})
+                            if isinstance(ri, str):
+                                name = ""
+                                url = ri
+                            else:
+                                name = ri.get("label", "<missing label>")
+                                url = ri.get("uri_human", "<missing DOI>")
+                            typ = "DOI"
+                        else:
+                            name = ""
+                            url = ""
+                            typ = "<unknown relation>"
+                        f.write(f"{typ}, {name}, {id}, {url}\n")
+
+class PrincipalInvestigatorReporter(Reporter):
+    def __init__(self, out_path: str):
+        self.checked = set()
+        self.contributors = Counter()
+        self.out_path = out_path
+    
+    def handle(self, file_data: dict):
+        id = file_data["id"]
+        
+        if id in self.checked:
+            return
+        self.checked.add(id)
+        
+        contributors = file_data.get("contributors", file_data.get("meta", {}).get("contributors", []))
+        
+        if contributors:
+            for contributor in contributors:
+                if "PrincipalInvestigator" not in contributor.get("contributor_role", []):
+                    continue
+                self.contributors[contributor.get("contributor_name", "<unknown contributor>")] += 1
+        else:
+            self.contributors["<datasets missing contributors>"] += 1
+    
+    def finish(self):
+        with open(self.out_path, "w") as f:
+            json.dump(self.contributors, f, indent=4)
+
 if __name__ == "__main__":
     reporters: list[Reporter] = [
-        TemporalReporter(FULL_REPORT_OUT, DROPPED_ERRORS_OUT),
-        PathErrorReporter(PATH_ERROR_OUT),
+        TemporalReporter("./temporal_report.json", "./dropped_errors.txt"),
+        # PathErrorReporter("./path_errors.txt"),
+        # UrlIdentifierReporter("dataset_relations.csv")
+        PrincipalInvestigatorReporter("principal_investigator_frequency.json"),
     ]
     asyncio.run(main(reporters))

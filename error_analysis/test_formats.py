@@ -10,7 +10,7 @@ import json
 from error_info_to_json import main as regenerate_errors
 import regex
 
-IN = ["./all-the-all-the-errors", "./cassava_errors", "./dropped_errors.txt"][2]
+IN = ["./all-the-all-the-errors", "./cassava_errors", "./dropped_errors.txt"][0]
 INFO_JSON = "./error-info.json"
 OUT_CSV = "./format-matches.csv"
 OUT_RE = "./format-regexes.txt"
@@ -73,7 +73,8 @@ def _fstring_to_regex(expr: str, include_source: bool = False) -> Any:
     return regex.compile("".join(parts), regex.DOTALL)
 
 class Format():
-    def __init__(self, source: str, regex: regex.Pattern, description: str):
+    def __init__(self, id: int, source: str, regex: regex.Pattern, description: str):
+        self.id = id
         self.source = source
         self.regex = regex
         self.description = description
@@ -88,7 +89,7 @@ def _load_formats(info_json: str, include_source: bool = False):
             try:
                 f = item["format"]
                 pattern = _fstring_to_regex(f, include_source=include_source)
-                formats.append(Format(item["source"], pattern, item["description"]))
+                formats.append(Format(item["id"], item["source"], pattern, item["description"]))
             except Exception as e:
                 pass
 
@@ -109,6 +110,7 @@ def enumerate_errors(errors: list[str], sample=-1, do_log=False, include_source:
         try:
             m, s = match_error(line, include_source=include_source)
         except TimeoutError as e:
+            print(f"TimeoutError on line {l+1}: {line}")
             m = None
             s = None
         if m:
@@ -129,7 +131,7 @@ def test_errors(errors: list[str], sample=-1, do_log=False, info_json=INFO_JSON,
     for l, line, fmt, search in enumerate_errors(errors, sample=sample, do_log=do_log, include_source=include_source):
         if fmt:
             if do_log:    
-                print(f"Matched on line {l+1}: {fmt.regex.pattern}")
+                print(f"Matched [id={fmt.id}] on line {l+1}: {fmt.regex.pattern}")
             counter[fmt.description] += 1
         else:
             if do_log:
