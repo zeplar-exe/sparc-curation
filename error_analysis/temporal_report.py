@@ -23,7 +23,12 @@ SAMPLE = -1 # -1 to process all datasets
 
 
 def parse_export_timestamp(timestamp: str) -> int:
-        normalized = timestamp.rstrip("Z").replace(",", ".")
+        # Normalize millisecond separator and ensure explicit UTC when 'Z' present
+        if not timestamp:
+            raise ValueError("Missing timestamp")
+        normalized = timestamp.replace(",", ".")
+        if normalized.endswith("Z"):
+            normalized = normalized.replace("Z", "+00:00")
         return int(datetime.fromisoformat(normalized).timestamp())
 
 class Reporter:
@@ -102,7 +107,10 @@ class TemporalReporter(Reporter):
         first_requested_url: str | None = None
         first_requested_timestamp: int | None = None
         error_graph: dict[int, Counter] = field(default_factory=lambda: defaultdict(Counter))
-        dropped_errors: int = 1
+        error_index_graph: dict[int, int] = field(default_factory=lambda: defaultdict(int))
+        curation_index_graph: dict[int, int] = field(default_factory=lambda: defaultdict(int))
+        submission_index_graph: dict[int, int] = field(default_factory=lambda: defaultdict(int))
+        dropped_errors: int = 0
         is_precision: bool = False
         is_sparc: bool = False
         is_rejoin: bool = False
@@ -115,6 +123,9 @@ class TemporalReporter(Reporter):
                 "first_requested_url": self.first_requested_url,
                 "first_requested_timestamp": self.first_requested_timestamp,
                 "error_graph": {str(ts): dict(counter) for ts, counter in self.error_graph.items()},
+                "error_index_graph": {str(ts): index for ts, index in self.error_index_graph.items()},
+                "curation_index_graph": {str(ts): index for ts, index in self.curation_index_graph.items()},
+                "submission_index_graph": {str(ts): index for ts, index in self.submission_index_graph.items()},
                 "dropped_errors": self.dropped_errors,
                 "is_precision": self.is_precision,
                 "is_sparc": self.is_sparc,
@@ -151,6 +162,10 @@ class TemporalReporter(Reporter):
         # format: 2023-05-10T20:49:41,892885Z
         timestamp = result["prov"]["timestamp_export_start"]
         unix_timestamp = parse_export_timestamp(timestamp)
+        
+        report.error_index_graph[unix_timestamp] = file_data.get("status", {}).get("error_index", -1)
+        report.curation_index_graph[unix_timestamp] = file_data.get("status", {}).get("curation_index", -1)
+        report.submission_index_graph[unix_timestamp] = file_data.get("status", {}).get("submission_index", -1)
         
         if status == "requested":
             dataset_uuid = id.split(":")[2]
@@ -332,6 +347,6 @@ if __name__ == "__main__":
         TemporalReporter("./temporal_report.json", "./dropped_errors.txt"),
         # PathErrorReporter("./path_errors.txt"),
         # UrlIdentifierReporter("dataset_relations.csv")
-        PrincipalInvestigatorReporter("principal_investigator_frequency.json"),
+        # PrincipalInvestigatorReporter("principal_investigator_frequency.json"),
     ]
     asyncio.run(main(reporters))

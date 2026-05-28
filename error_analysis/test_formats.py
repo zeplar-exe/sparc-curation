@@ -81,20 +81,22 @@ class Format():
 
 formats: list[Format] = []
 
-def _load_formats(info_json: str, include_source: bool = False):
+def _load_formats(info_json: str, include_source: bool = False, do_log: bool = False):
     if len(formats) > 0:
         return
     with open(info_json) as f:
-        for item in json.load(f):
+        for i, item in enumerate(json.load(f)):
             try:
                 f = item["format"]
                 pattern = _fstring_to_regex(f, include_source=include_source)
                 formats.append(Format(item["id"], item["source"], pattern, item["description"]))
             except Exception as e:
-                pass
+                if do_log:
+                    print(f"Error processing format {i}: {e}")
 
-def match_error(error: str, include_source: bool = False) -> tuple[Format | None, regex.Match | None]:
-    _load_formats(INFO_JSON, include_source=include_source)
+def match_error(error: str, include_source: bool = False, do_log: bool = False) -> tuple[Format | None, regex.Match | None]:
+    _load_formats(INFO_JSON, include_source=include_source, do_log=do_log)
+
     for fmt in formats:
         search = fmt.regex.search(error, timeout=1)
         if search:
@@ -105,12 +107,15 @@ def match_error(error: str, include_source: bool = False) -> tuple[Format | None
 def enumerate_errors(errors: list[str], sample=-1, do_log=False, include_source: bool = False) -> Iterable[tuple[int, str, Format | None, regex.Match | None]]:
     if sample > 0:
         shuffle(errors)
+    
     lines = errors[:sample] if sample > 0 else errors
+    
     for l, line in enumerate(lines):
         try:
-            m, s = match_error(line, include_source=include_source)
+            m, s = match_error(line, include_source=include_source, do_log=do_log)
         except TimeoutError as e:
-            print(f"TimeoutError on line {l+1}: {line}")
+            if do_log:
+                print(f"TimeoutError on line {l+1}: {line}")
             m = None
             s = None
         if m:
@@ -148,7 +153,7 @@ def parse_args():
     parser.add_argument("--out-regex", default=OUT_RE, help="Path to output regex patterns file.")
     parser.add_argument("--sample-size", type=int, default=SAMPLE_SIZE, help="Number of lines to sample; -1 means all lines.")
     parser.add_argument("--no-regenerate", action="store_true", help="Skip regenerating error-info.json before matching.")
-    parser.add_argument("--log", default=True, action="store_true", help="Enable per-line logging.")
+    parser.add_argument("--no-log", default=False, action="store_true", help="Disable per-line logging.")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -166,7 +171,7 @@ if __name__ == "__main__":
 
     with open(args.input) as f:
         lines = [l.strip() for l in f.readlines()]
-        counter = test_errors(lines, sample=args.sample_size, do_log=args.log, info_json=args.info_json)
+        counter = test_errors(lines, sample=args.sample_size, do_log=not args.no_log, info_json=args.info_json)
 
     with open(args.out_csv, "w") as f:
         f.write("Description\tCount\n")

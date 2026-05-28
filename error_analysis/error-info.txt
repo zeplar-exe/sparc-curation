@@ -1,0 +1,411 @@
+schemas.py 575,23:         raise exc.ValidationError(errors)
+    Runs on Draf6Validator errors; checks for array and string compliance; Caught sometime to upstream addError, discarded sometimes
+    jsonschema validator output (error.message from each self.validator.iter_errors(appstruct) item)
+objects.py 891,29:         raise exc.ExtractionValidationError(msg)
+    Raises for missing "type", "__extract_version_", "remote_id", "object_type", "contents" on dataset blob; Caught in upstream addError
+    f'validate failed for\n{json.dumps(blob, sort_keys=True, indent=2, cls=JEncode)}\n'
+converters.py 182,25:      if self.addError(msg, pipeline_stage=self.__class__.__name__ + '.export-error'):
+    Unhandled field in class during serialization of triples
+    f'Unhandled {self.__class__.__name__} field: {field}'
+core.py 374,16:            if addError(**error):
+    Generic pipeline stage error on idlib.exc.RemoteError
+    exception object (error=e) from idlib.exc.RemoteError
+core.py 393,16:            if addError(**error):
+    Generic pipeline stage error on idlib.exc.ResolutionError
+    f'{stage.lifters.id} could not resolve {type(obj)}: {oops} {obj.asUri()}'
+core.py 405,16:            if addError(**error):
+    Generic pipeline stage error on any Exception
+    exception object (error=e) from generic Exception
+datasets.py 489,26:        self.addError(msg,
+    Dataset path has duplicate suffix
+    f'path has duplicate suffix {path.as_posix()!r}'
+datasets.py 496,29:        if self.addError(msg,
+    Dataset path has bad casing
+    f'path has bad casing {path.as_posix()!r}'
+datasets.py 694,29:        if self.addError(message,
+    Dataset CSV has N empty rows
+    f'There are {diff} empty rows in {posix_path}'
+datasets.py 706,30:        self.addError(msg,
+    File likely failed to fetch
+    f'We have a likely case of a file that failed to fetch {ps} != {pcs}! {path}'
+datasets.py 716:           if self.addError(message,
+    Possible wrong file extension based on delimiter/content mismatch
+    f'Possible wrong file extension in {path_id} {project_relative_path} should be {value}?'
+datasets.py 723:           if self.addError(exc.EncodingError(message),
+    Non-utf8 text encoding detected while parsing csv/tsv; wrapped in exc.EncodingError(...)
+    f'encoding bad {encoding!r} {posix_path}'
+datasets.py 735:           if self.addError(message,
+    Generic CSV error
+    f'WHAT HAVE YOU DONE {e!r} {posix_path}'
+datasets.py 771:           if self.addError(message,
+    xlsx malformed for xlsx2csv path
+    f'malformed xlsx file could not be read by xlsx2csv {path}'
+datasets.py 778:           if self.addError(message,
+    xlsx malformed for openpyxl path
+    f'malformed xlsx file could not be read by openpyxl {path}'
+datasets.py 838:           if self.addError(msg,
+    openpyxl fixup: empty trailing columns detected and trimmed
+    f'Empty columns beyond {max_lnn} detected in {path}'
+datasets.py 848:           if self.addError(msg,
+    openpyxl fixup: contiguous trailing empty rows detected and trimmed
+    f'Empty rows beyond {first_cont_empty} detected in {path}'
+datasets.py 999:           if self.addError(msg,
+    sparse empty rows detected during xlsx2 iteration
+    f'{emptyrs} empty rows detected in {path}'
+datasets.py 1020:          if self.addError(exc.EncodingError(message),
+    xlsx workbook has more than one sheet (schema expects one tab); wrapped in exc.EncodingError(...)
+    f'too many sheets ({ns}) in {posix_path}'
+datasets.py 1038:          if self.addError(exc.EncodingError(message),
+    xlsx2csv converter structural weirdness (AttributeError path); wrapped in exc.EncodingError(...)
+    f'xlsx2csv: major sheet weirdness (probably a bug in the xlsx2csv converter)? in {path}'
+datasets.py 1045:          def _bad_filetype(self, type_):
+    Excel file has illegal bad-filetype error for unsupported tabular input
+    f'bad filetype {type}\n{posix_path}'
+datasets.py 1064:          if self.addError(error)
+    UTF-8 BOM/FEFF detected in tabular cell; records EncodingError; exc.EncodingError(f"encoding feff error in '{path}'")
+    f'EncodingError({message})'
+derives.py 176:            raise exc.BadDataError(msg)
+    Filename is missing from record in dataset
+    f'BadDataError(\'filename missing from record in {dataset_relative_path}\')'
+derives.py 203:            if he.addError(message,
+    Manifest-lifted path metadata reports missing/non-existent path referenced by manifest
+    f'Non-existent path listed in manifest {dataset_relative_path}\n{message}'
+derives.py 275:            if he.addError(msg, blame='submission', path=drp):
+    Manifest record points to file path that does not exist
+    f'A path listed in manifest {drp} does not exist! {record_drp}'
+derives.py 279:            if he.addError(e, blame='submission', path=drp):
+    BadDataError during manifest record lifting
+    exception object e (exc.BadDataError)
+derives.py 616:            if he.addError(msg,
+    Bad specimen folder location in legacy sample layout handling (level < 2)
+    f'Bad location for specimen folder! {drp}'
+derives.py 655:            if he.addError(msg, blame='submission', path=path):
+    Missing folder for sample id
+    f'No folder for sample {sample_id}'
+derives.py 661:            if he.addError(msg, blame='submission', path=path):
+    Non-unique sample ids detected
+    'non-unique-samples'
+derives.py 675:            if he.addError(msg, blame='submission', path=path):
+    Duplicate sample_id records where uniqueness is required (template version >= 2)
+    f'sample_id is not unique! {sample_id}\n{blob}'
+derives.py 748:            if he.addError(msg, blame='submission', path=path):
+    Cycle detected in was_derived_from graph
+    f'cycle detected in was_derived_from {seen}'
+derives.py 760:            if he.addError(msg, blame='submission', path=path):
+    was_derived_from parent missing or unsupported formula reference
+    f'Sample was_derived_from specified as a formula. We do not currently support this. {blob["sample_id"]!r} -> {parent!r}'
+derives.py 760:            if he.addError(msg, blame='submission', path=path):
+    was_derived_from parent missing or unsupported formula reference
+    f'Sample was_derived_from does not exist! {blob["sample_id"]!r} -> {parent!r}'
+derives.py 851:            if he.addError(msg,
+    Subject ids in samples missing from subjects metadata
+    f'There are subjects listed in samples that are not in subjects!\n{missing_subs_from_samps}'
+derives.py 859:            if he.addError(msg,
+    Subject ids in sites missing from subjects metadata
+    f'There are subjects listed in sites that are not in subjects!\n{missing_subs_from_sites}'
+derives.py 867:            if he.addError(msg,
+    Sample ids in sites missing from samples metadata
+    f'There are samples listed in sites that are not in samples!\n{missing_samps_from_sites}'
+derives.py 885:            if he.addError(msg,
+    Subjects in pools also have standalone directories
+    f'There are subjects in a pool that also have their own directory!\n{inter_pool_sub}'
+derives.py 893:            if he.addError(msg,
+    Samples in pools also have standalone directories
+    f'There are samples in a pool that also have their own directory!\n{inter_pool_sam}'
+derives.py 902:            if he.addError(msg,
+    Entity mapped twice via directory name and manifest
+    f'There are paths with double mapped entities via directory name and manifest!\n{pformat(double_done_ent_paths)}'
+derives.py 910:            if he.addError(msg,
+    Entity appears only in manifest (not metadata sheets)
+    f'There are entities that appear only in a manifest!\n{ent_only_manifest}'
+derives.py 919:            if he.addError(msg,
+    Directory name and manifest entity mapping mismatch
+    f'There are directories with mismatched manifest record entity mapping!\n{ent_dir_mismatch}'
+derives.py 929:            if he.addError(msg,
+    Entity marked metadata_only but has directory/manifest presence
+    f'There are entities marked as metadata only that have a directory or manifest entry!\n{not_actually_metadata_only}'
+derives.py 937:            if he.addError(msg,
+    Performance metadata has no corresponding directory
+    f'There are performances that have no corresponding directory!\n{not_done_perfs}'
+derives.py 945:            if he.addError(msg,
+    Site metadata has no corresponding directory
+    f'There are sites that have no corresponding directory!\n{not_done_sites}'
+derives.py 960:            if he.addError(msg,
+    Warning: possible metadata-only specimens inferred from child paths
+    f'Warning. Unmarked metadata-only specimens that have no corresponding directory, but have children that do.\n{maybe_not_done_specs}'
+derives.py 968:            if he.addError(msg,
+    Specimen metadata has no corresponding directory
+    f'There are specimens that have no corresponding directory!\n{def_not_done_specs}'
+derives.py 1053:           if he.addError(msg_report,
+    Unmatched directories with no corresponding metadata record (with distance report)
+    f'There are directories that have no corresponding metadata record!\n{pformat(not_done_after_eit_dirs)}\nreport:\n{report}'
+normalization.py 66:       if he.addError(repr(e)):
+    related_identifier_record: HasProtocol URL/DOI normalization failure (protocol dereference path)
+    repr(e)
+normalization.py 82:       if he.addError(repr(e)):
+    related_identifier_record: related_identifier conversion failure (DOI/RRID parse path)
+    repr(e)
+normalization.py 273:      if self.addError(msg,
+    RRID malformed identifier detected during normalization
+    f'malformed RRID: {value}'
+normalization.py 615:      if self.addError(msg,
+    Generic field normalization exception in NormValues._normv (fallback keeps original value)
+    f'Error normalizing: {thing!r}'
+normalization.py 648:      if self.addError(msg,
+    Normalization returned None for non-empty input
+    f'Normalization {key} returned None for input {jd(str(thing))}'
+normalization.py 705:      if self.addError(e,
+    number_of_subjects/int-cast failure (also used by samples/sites/performances counts)
+    exception object e (ValueError from int(value))
+normalization.py 764:      if self.addError(idlib.Orcid._id_class.OrcidLengthError(msg)):
+    ORCID wrong length in freeform contributor_orcid; wrapped in OrcidLengthError(...)
+    f'orcid wrong length {value!r} {self._path.as_posix()!r}'
+normalization.py 781:      if self.addError(idlib.Orcid._id_class.OrcidLengthError(msg)):
+    ORCID wrong length after https/ORCID-prefix parsing; wrapped in OrcidLengthError(...)
+    f'orcid wrong length {value!r} {self._path.as_posix()!r}'
+normalization.py 790:      if self.addError(idlib.Orcid._id_class.OrcidChecksumError(msg)):
+    ORCID checksum validation failure; wrapped in OrcidChecksumError(...)
+    f'orcid failed checksum {value!r} {self._path.as_posix()!r}'
+normalization.py 798:      if self.addError(idlib.Orcid._id_class.OrcidMalformedError(msg)):
+    ORCID malformed value/canonicalization failure; wrapped in OrcidMalformedError(...)
+    f'orcid malformed {value!r} {self._path.as_posix()!r}'
+normalization.py 815:      self.addError(ne, ... contributor_role ...)
+    Contributor role could not be normalized; records TabularCellError with row/column context
+    f'<TabularCellError {data}>'
+normalization.py 888:      if self.addError(e, pipeline_stage=_ps):
+    protocol_url_or_doi parse/coercion exception for dataset description protocols
+    exception object e from NormDatasetDescriptionFile._protocol_url_or_doi(v)
+normalization.py 892:      if self.addError(_pp, pipeline_stage=_ps, blame='debug'):
+    Debug breadcrumb path emitted alongside protocol_url_or_doi exception
+    _pp = self._path.as_posix()
+normalization.py 950:      if self.addError(msg,
+    subject_id has non-string type (coerced to string)
+    f'Bad type for subject_id: {type(value)}'
+normalization.py 1032:     if self.addError(msg, pipeline_stage=self.__class__.__name__, blame='pipeline'):
+    Units parser incomplete parse for quantitative fields
+    f'Incomplete parse for {jd(str(value))} for {caller_name}'
+normalization.py 1041:     if self.addError(msg, pipeline_stage=self.__class__.__name__, blame='pipeline'):
+    Units parser parse failure / unexpected quantitative value
+    f'Unexpected and unhandled value {jd(str(value))} for {caller_name}'
+normalization.py 1069:     self.addError(msg, pipeline_stage=self.__class__.__name__, blame='submission', ...)
+    age field contains disallowed categorical value ('adult')
+    f'Bad value for age: {value}\ndid you want to put that in age_cagegory instead?\n{jd(self._path.as_posix())}'
+normalization.py 1094:     if self.addError(msg, pipeline_stage=self.__class__.__name__, blame='submission', ...)
+    age_range_max contains disallowed categorical value ('Normal')
+    f'Bad value for age_range_max: {value}\ndid you want to put that in age_cagegory instead?\n{jd(str(self._path.as_posix()))}'
+normalization.py 1197:     if self.addError(msg,
+    sample_id has non-string type (coerced to string)
+    f'Bad type for sample_id: {type(value)}'
+objects.py 577:            if he.addError(e, path=path):
+    Manifest extraction failure in extract_fun_manifest; embeds stage objects.manifest.extract_fun error into extracted object metadata
+    exception object e from mf.data
+objects.py 749:            if he.addError(e, blame='submission', path=path, pipeline_stage='objects.extract.extract_fun'):
+    Unhandled exception during object extraction function execution; writes extract-error blob to error path
+    exception object e from extract_fun(path)
+objects.py 768:            if he.addError(e, blame='pipeline', path=path, pipeline_stage='objects.extract.validate_extract'):
+    Extracted blob failed extraction schema/shape checks (ExtractionValidationError); writes validate-extract-error blob
+    exception object e (exc.ExtractionValidationError)
+paths.py 1283:            if he.addError(msg, path=dsrp, json_path=('data', i)):
+    Banned basename detected in path metadata row
+    f'illegal file detect {path_meta["basename"]}'
+paths.py 1293:            if he.addError(msg, path=dsrp, json_path=('data', i, source)):
+    Zero-byte file detected in path metadata (size_bytes == 0)
+    f'zero byte file detect'
+paths.py 1306:            if he.addError(msg, path=dsrp, json_path=('data', i)):
+    MIME mismatch between magic_mimetype and extension-derived mimetype
+    f'mime types do not match {mimetype} != {muggle_mimetype}'
+paths.py 1323:            if he.addError(msg, path=dsrp, json_path=('data', i, source)):
+    Banned mimetype classification detected
+    f'banned mimetype detected {mimetype}'
+paths.py 1342:            if he.addError(msg, path=dsrp, json_path=('data', i)):
+    Unknown/missing mimetype for path metadata row (string/path variants)
+    f'FIXME top level folder needs a mimetype!'
+paths.py 1342:            if he.addError(msg, path=dsrp, json_path=('data', i)):
+    Unknown/missing mimetype for path metadata row (string/path variants)
+    f'unknown mimetype {path_meta["basename"]}'
+paths.py 1342:            if he.addError(msg, path=dsrp, json_path=('data', i)):
+    Unknown/missing mimetype for path metadata row (string/path variants)
+    f'unknown mimetype {"".join(dsrp.suffixes)}'
+pipelines.py 206:          he.addError(msg)
+    Contributor name contains illegal semicolon in ContributorPipeline._process
+    f'Bad symbol in name {name!r}'
+pipelines.py 224:          he.addError(msg)
+    Contributor last_name malformed (contains spaces); normalized with hyphen replacement
+    f'Malformed last_name {ln!r}'
+pipelines.py 322:          if he.addError(e, path=self.path):
+    PathPipeline transformer init caught expected file/data/extension errors and embeds them into empty data
+    exception object e (FileTypeError|NoDataError|BadDataError|WrongFileExtensionError)
+pipelines.py 335:          if he.addError(e, path=self.path):
+    PathPipeline transformer init caught unexpected exception; embeds error and logs near-fatal warning
+    exception object e (generic Exception)
+pipelines.py 351:          if he.addError(e, path=self.path):
+    PathPipeline transformed-data access caught expected file/data/extension errors and returns embedded-error data
+    exception object e (FileTypeError|NoDataError|BadDataError|WrongFileExtensionError)
+pipelines.py 472:          if he.addError(msg, path=self.path):
+    Multiple distinct template_schema_version values detected; maximum selected and warning embedded
+    f'multiple distinct entries for template_schema_version detected {stsv} using maximum {maxv}'
+pipelines.py 472:          if he.addError(msg, path=self.path):
+    Multiple distinct template_schema_version values detected; maximum selected and warning embedded
+    f'multiple entries for template_schema_version {maxv}'
+pipelines.py 589:          he.addError(e, path=path)
+    XmlFilePipeline _path_to_json_meta NotImplementedError recorded under xml pipeline stage
+    exception object e (NotImplementedError)
+pipelines.py 853:          he.addError(f'Filtered due to schema failure: {value}', json_path=path)
+    Filter-failure scrub in post-process removes values at failing schema paths and records filter errors
+    f'Filtered due to schema failure: {value}'
+protocols.py 178:          if self.addError(msg, blame='submission'):
+    Dereferenced protocol URI responded with HTTP status > 400
+    f'error accessing {end_uri} {sc}'
+protocols.py 184:          if self.addError(e, blame='submission'):
+    Missing schema while resolving/coercing protocol URI (_MissingSchema)
+    exception object e (self._MissingSchema)
+protocols.py 187:          if self.addError(e, blame='submission'):
+    Protocol URI failed CURIE parsing (OntId.BadCurieError)
+    exception object e (OntId.BadCurieError)
+xml.py 46:                 raise NotImplementedError(msg)
+    Converter not implemented
+    f'NotImplementedError(\'FIXME converter not implemented for whatever this is {path}\')'
+xml.py 46:                 raise NotImplementedError(msg)
+    Converter not implemented (bare exception string without class wrapper)
+    f'FIXME converter not implemented for whatever this is {path}'
+export/xml.py: no direct addError calls
+    XML exporter is extractor-only for errors: reads embedded errors via get_all_errors and logs malformed error payloads
+    n/a (no new messages emitted here)
+jsonschema
+    JSON value does not match Regex
+    f'{value} does not match \'{regex}\''
+jsonschema
+    JSON array value should be empty
+    f'{value} should be non-empty'
+jsonschema
+    JSON is not valid under any schema
+    f'{json} is not valid under any of the given schemas'
+jsonschema
+    Required JSON property is missing from JSON
+    f'{required} is a required property'
+jsonschema
+    JSON value value is of incorrect type
+    f'{value} is not of type \'{type}\''
+jsonschema
+    JSON does not pass validity check
+    f'{json} is valid under each of {schema}'
+jsonschema
+    JSON value is not one of allowed values
+    f'{value} is not one of {allowed}'
+jsonschema
+    JSON value should not be valid under the given schema
+    f'{value} should not be valid under {schema}'
+jsonschema
+    Additional JSON properties found where not allows
+    f'Additional properties are not allowed {json}'
+jsonschema
+    JSON array/value shorter than schema minimum (e.g. minItems)
+    f'{json} is too short'
+datasets.py 1404          return eblob
+    Excel table could not be normalized
+    f'Problem with tabular cell {cell} could not be normalized, best was {nearest}'
+derives.py 1053           if he.addError(msg_report,
+    Directories in dataset have no corresponding specimen metadata
+    f'There are directories that have no corresponding specimen!\n{pformat(not_done_dirs_no_spec)}'
+schemas.py 2515, jsonschema format validation
+    Format validation failure: value is not in required format (e.g., IRI)
+    f'{value} is not a {format_type}'
+datasets.py UNK           if self.addError(msg,
+    Excel file has illegal empty columns
+    f'Empty columns detected in {filepath}'
+derives.py 175            raise exc.BadDataError(msg)
+    Manifest record missing required filename field
+    f'filename missing from record in {dataset_relative_path}'
+datasets.py 1163          raise exc.MalformedHeaderError(msg)
+    Primary key component missing from table specification
+    f'Missing a primary key component {e}'
+datasets.py 1593          raise KeyError(msg)
+    Could not find record primary key for alt_header or header in column mapping
+    f'Could not find record primary key for {n} in\n"{path}"\n\n{rtk}\nnot in\n{list(norm_dict)}'
+datasets.py 1593          raise KeyError(msg)
+    Could not find record primary key for alt_header in manifest filename mapping
+    f'Could not find record primary key for alt_header in "{path}"  filename not in [\'filename_timestamp_description_file_type\']'
+datasets.py 1442          munge(e)
+    TabularCellError: cell value validation failure during iteration
+    f'[TabularCellError{stuff}]'
+utils.py 822              raise idlib.exc.MalformedIdentifierError(msg)
+    Identifier did not match any known identifier pattern in idlib normalization
+    f'{id_uri_curie_uuid.encode()!r} matched no known pattern'
+idlib
+    Identifier malformed in external idlib library (e.g., protocols.io URL validation)
+    f'MalformedIdentifierError({message})'
+idlib
+    protocols.io URL not shared with SPARC group
+    f'(\'the protocol must be shared with the SPARC group and the Protocol.io URL is noted in this field. Please share with the SPARC group.\', None, None, None)'
+idlib
+    protocols.io URL help text present but protocol missing
+    f'(\'The Protocol.io URL for the protocol. Once the protocol is uploaded to Protocols.io\', None, None, None)'
+idlib
+    protocols.io refresh failure
+    f'protocols.io refresh error'
+idlib
+    protocols.io URL is not a valid protocols.io identifier
+    f'Not a protocols.io id: {url}'
+idlib
+    protocols.io URL link placeholder in a manifest or record
+    f'(\'link1\', None, None, None)'
+idlib
+    protocols.io URL link placeholder in a manifest or record
+    f'(\'URL link\', None, None, None)'
+idlib
+    protocols.io or related text placeholder in a manifest or record
+    f'(\'Also TBD\', None, None, None)'
+idlib
+    Tabular spreadsheet header text placeholder in protocol metadata
+    f'(\'Intraductal infusion protocol\', None, None, None)'
+idlib
+    protocols.io or URL-like placeholder value in a manifest/record
+    f'(\'google.com\', None, None, None)'
+idlib
+    protocols.io or URL-like placeholder value in a manifest/record
+    f'(\'reddit.com\', None, None, None)'
+idlib
+    Missing protocols.io credentials file
+    f"[Errno 2] No such file or directory: '/var/lib/sparc/.config/pyontutils/protocols-io-creds.json'"
+error UNK
+    Entities with double mapping detected in record hierarchy
+    f'There are entities with double mapping via directory name and manifest! {entities}'
+error UNK
+    Python ValueError on int() conversion
+    f'invalid literal for int() with base 10: {value}'
+error UNK
+    Primary key value missing during record formation
+    f'A primary key value was None!'
+datasets.py 660:           if he.addError(msg, blame='submission', path=path):
+    Non-unique sample IDs detected during sample derivation
+    f'non-unique-samples'
+datasets.py 1064:         if self.addError(error)
+    UTF-8 BOM/FEFF detected while parsing tabular file
+    f'encoding feff error in {posix_path}'
+raw_json.py 16; objects.py 1345; datasets.py 788, 794, 828, 1015, 1708:         raise exc.NoDataError
+    NoDataError raised generally when a file is invalid
+    f'NoDataError({posix_path})'
+datasets.py 1618:         raise exc.WrongFileExtensionError(msg)
+    Manifest file has wrong extension
+    f'Wrong file extension for {path}, contents appear to be {value}'
+datasets.py 1593:         raise KeyError(msg)
+    Manifest metadata_element value missing from allowed header list
+    f'Could not find record primary key for alt_header in "{path}"  metadata_element not in [\'TEMPA_0\', \'species\', \'sex\', \'age_category\', \'age_range_min\', \'age_range_max\', \'age\', \'disability_disease\', \'handedness\', \'strain\', \'rrid_for_strain\', \'genotype\', \'experiment\', \'virus\', \'manufacturer\', \'virus_catalog_number\', \'specimen\', \'slice_preparation\', \'specimen_anatomical_location_1\', \'slice_thickness_microns_1\', \'specimen_anatomical_location_2\', \'slice_thickness_microns_2\', \'specimen_anatomical_location_3\', \'slice_thickness_microns_3\', \'protocol_title\', \'protocol_url_or_doi\', \'software\', \'software_version\', \'software_vendor\', \'microscope\', \'objective\', \'reporter1\', \'reporter1_population\', \'reporter1__detection_filter\', \'reporter2\', \'reporter2_population\', \'reporter2__detection_filter\', \'reporter3\', \'reporter3_population\', \'reporter3__detection_filter\', \'file\', \'scaling\']'
+datasets.py 133:          raise exc.MalformedHeaderError(msg)
+    Tabular header duplicate-entries variant (explicit duplicate list format)
+    f'Original header is not unique. Duplicate entries: {duplicates}'
+datasets.py 1813:         if self.addError
+    Common cells detected between alt header and header
+    f"Common cells between alt header and header! {cells}"
+pipelines.py 1610:        return {'errors': ... }
+    Mismatch between target_value and value during controlled-vocabulary checks
+    f"mismatch between target_value and value {target_value} != {value_list}"
+error UNK                  (generic)
+    Vague Excel filename-only error messages
+    f'{file}.xlsx'
+error UNK
+    Generic CSV filename error
+    f'{file}.csv'
+datasets.py 1813:          if self.addError(e, pipeline_stage='MetadataFile._headers', ...)
+    Aggregated malformed-header conditions (null/dupes/common cells/PK issues); exc.MalformedHeaderError('; '.join([e.args[0] for e in errors]))
+    f'MalformedHeaderError({message})'
