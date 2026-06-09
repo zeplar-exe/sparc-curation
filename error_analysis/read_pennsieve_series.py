@@ -77,7 +77,10 @@ for dataset_id, event_data in data.items():
     
     buffer = []
     events: list[list[Any]] = [ev.get("events", [ev.get("event")]) for ev in event_groups]
-    flat_events = [ev for sub in events for ev in sub if ev["eventType"] in filter_types]
+    flat_events = sorted(
+        (ev for sub in events for ev in sub if ev["eventType"] in filter_types),
+        key=lambda ev: ev["createdAt"],
+    )
     
     for i, ev in enumerate(flat_events):
         et = ev["eventType"]

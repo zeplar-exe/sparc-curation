@@ -215,14 +215,23 @@ class TemporalReporter(Reporter):
         for err in json_errors:
             try:
                 fmt, match = match_error(err)
-                if fmt:
-                    report.error_graph[unix_timestamp][fmt.description] += 1
+                if fmt and match:
+                    d = fmt.description
+                    try:           
+                        d += " regex(" + match.group("regex") + ")"
+                    except IndexError:
+                        pass
+                    try:
+                        d += " required(" + match.group("required") + ")"
+                    except IndexError:
+                        pass
+                    report.error_graph[unix_timestamp][d] += 1
                 else:
                     report.dropped_errors += 1
-                    self.dropped_error_file.write(f"{id}\t No format matching '{err.replace("\n", " ")}'\n")
+                    self.dropped_error_file.write(f"{id}\t No format matching '{err.replace("\n", "\\n")}'\n")
             except TimeoutError:
                 report.dropped_errors += 1
-                self.dropped_error_file.write(f"{id}\t Timed out matching '{err.replace("\n", " ")}'\n")
+                self.dropped_error_file.write(f"{id}\t Timed out matching '{err.replace("\n", "\\n")}'\n")
         self.dropped_error_file.flush()
     
     def finish(self):

@@ -13,28 +13,28 @@ def get_path_errors(file, sample_size=-1):
         lines = f.readlines()
         
         total = min(sample_size, len(lines)) if sample_size > 0 else len(lines)
-        for l, line, fmt, search in tqdm(enumerate_errors(lines, sample=sample_size, include_source=True), total=total):
-            if not fmt or not search:
+        for l, line, fmt, match in tqdm(enumerate_errors(lines, sample=sample_size, include_source=True), total=total):
+            if not fmt or not match:
                 c["<unmatched>"][line.strip()] += 1
                 continue
             d = fmt.description
             try:           
-                d += " regex(" + search.group("regex") + ")"
+                d += " regex(" + match.group("regex") + ")"
             except IndexError:
                 pass
             try:
-                d += " expected_type(" + search.group("type") + ")"
+                d += " expected_type(" + match.group("type") + ")"
             except IndexError:
                 pass
             try:
-                d += " required(" + search.group("required") + ")"
+                d += " required(" + match.group("required") + ")"
             except IndexError:
                 pass
             try:
-                d += " allowed(" + search.group("allowed") + ")"
+                d += " allowed(" + match.group("allowed") + ")"
             except IndexError:
                 pass
-            c[d][search.group("source")] += 1
+            c[d][match.group("source")] += 1
         
     return c
 

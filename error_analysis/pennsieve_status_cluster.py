@@ -13,13 +13,20 @@ def parse_iso8601(value: str) -> datetime | None:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def event_sort_key(event: dict) -> datetime:
+    parsed = parse_iso8601(event.get("createdAt"))
+    if parsed:
+        return parsed
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
 def cluster_sequence(events: list[dict]) -> list[dict]:
     if not events:
         return []
 
     ordered_events = sorted(
         events,
-        key=lambda event: event["createdAt"],
+        key=event_sort_key,
     )
 
     clusters = []
@@ -63,13 +70,25 @@ clustered = defaultdict(list)
 for dataset_id, sequences in data.items():
     for sequence in sequences:
         clusters = cluster_sequence(sequence)
+        session_start = sequence[0]["createdAt"] if sequence else None
+        session_end = sequence[-1]["createdAt"] if sequence else None
+        session_duration_hours = None
+        if sequence:
+            start_time = parse_iso8601(sequence[0]["createdAt"])
+            end_time = parse_iso8601(sequence[-1]["createdAt"])
+            if start_time and end_time and end_time >= start_time:
+                session_duration_hours = (end_time - start_time).total_seconds() / 3600
+
         clustered[dataset_id].append(
             {
                 "start_event_type": sequence[0]["event"] if sequence else None,
                 "end_event_type": sequence[-1]["event"] if sequence else None,
-                "sequence_start": sequence[0]["createdAt"] if sequence else None,
-                "sequence_end": sequence[-1]["createdAt"] if sequence else None,
-                "length": len(clusters),
+                "sequence_start": session_start,
+                "sequence_end": session_end,
+                "session_start": session_start,
+                "session_end": session_end,
+                "session_duration_hours": session_duration_hours,
+                "cluster_count": len(clusters),
                 "clusters": clusters,
             }
         )
