@@ -3,8 +3,8 @@ from test_formats import enumerate_errors
 from collections import Counter, defaultdict
 from tqdm import tqdm
 
-IN = "all-the-all-the-errors"
-OUT = "jsonschema_errors.txt"
+IN = "path_errors.txt" # "all-the-all-the-errors"
+OUT = "all_jsonschema_errors.txt"
 
 
 def get_path_errors(file, sample_size=-1):

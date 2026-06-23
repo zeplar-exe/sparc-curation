@@ -225,6 +225,14 @@ class TemporalReporter(Reporter):
                         d += " required(" + match.group("required") + ")"
                     except IndexError:
                         pass
+                    try:
+                        d += " expected_type(" + match.group("type") + ")"
+                    except IndexError:
+                        pass
+                    try:
+                        d += " allowed(" + match.group("allowed") + ")"
+                    except IndexError:
+                        pass
                     report.error_graph[unix_timestamp][d] += 1
                 else:
                     report.dropped_errors += 1
