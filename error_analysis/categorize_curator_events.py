@@ -1,4 +1,3 @@
-import difflib
 import json
 import os
 import re
@@ -39,17 +38,30 @@ SDS_RESERVED_RE = re.compile(
     re.IGNORECASE,
 )
 
-TEXT_METADATA_FIELDS = {
-    "UPDATE_README": ("oldReadme", "newReadme"),
-    "UPDATE_DESCRIPTION": ("oldDescription", "newDescription"),
-    "UPDATE_NAME": ("oldName", "newName"),
-    "UPDATE_CHANGELOG": ("oldChangelog", "newChangelog"),
-    "UPDATE_LICENSE": ("oldLicense", "newLicense"),
-    "UPDATE_BANNER_IMAGE": ("oldBanner", "newBanner"),
-}
+# Reserved SDS file -> grammatical label, for per-file splitting of File Structure events
+RESERVED_FILE_KINDS = (
+    ("manifest", "Manifest"),
+    ("subjects", "Subjects"),
+    ("samples", "Samples"),
+    ("dataset_description", "Dataset Description"),
+    ("readme", "README"),
+)
 
-NORMALIZE_RE = re.compile(r"\s+")
-DIFF_CHAR_LIMIT = 20000
+# Records & models whose model is auto-generated subject/sample metadata
+SUBJECT_SAMPLE_MODEL_RE = re.compile(r"subject|sample", re.IGNORECASE)
+
+
+def reserved_file_kind(name):
+    """Return a grammatical reserved-file label for a package name, or None."""
+    if not name:
+        return None
+    stem = os.path.basename(name).strip().lower()
+    if "." in stem:
+        stem = stem.rsplit(".", 1)[0]
+    for needle, label in RESERVED_FILE_KINDS:
+        if stem == needle:
+            return label
+    return None
 
 
 def is_sds_name(name):
@@ -99,43 +111,15 @@ def is_folder(detail):
     return node.startswith("N:collection:")
 
 
-def _normalize_text(text):
-    return NORMALIZE_RE.sub(" ", text or "").strip().lower()
-
-
-def metadata_edit_stats(event_type, detail):
-    keys = TEXT_METADATA_FIELDS.get(event_type)
-    if not keys or not isinstance(detail, dict):
-        return None
-    old = detail.get(keys[0], "") or ""
-    new = detail.get(keys[1], "") or ""
-    trivial = _normalize_text(old) == _normalize_text(new)
-    magnitude = 1.0 - difflib.SequenceMatcher(None, old[:DIFF_CHAR_LIMIT], new[:DIFF_CHAR_LIMIT]).ratio()
-    return trivial, magnitude
-
-
 EVENT_MAP = {
     "CREATE_PACKAGE": ("File Structure", "Create"),
     # "DELETE_PACKAGE": ("File Structure", "Delete"),
     "MOVE_PACKAGE": ("File Structure", "Move"),
-    "RENAME_PACKAGE": ("File Structure", "Rename"), 
+    "RENAME_PACKAGE": ("File Structure", "Rename"),
     "RESTORE_PACKAGE": ("File Structure", "Restore"),
-    # split out per-file (such as manifests, subjects, samples, metadata, readme)
-    # split metadata edits by readme, title, names/contributors, keywords/tags
-    # exclude subject changes
-    # normalize by number of datasets/publication events in a single year
-    # fix at pub events; includes datasets never published
-    # fix at publication graph; need to change bins to be  publicaiton year
-    # new figure: ranking of frequent error types
-    # for error types do 0 or 1 existence, finding top errors across all datasets
-        # for reference; exclude Converter not implemented, Manifest errors
-    # exclude post-first publications on any dataset with multiple publications
-        # put those subsequent publications (where they exist) into copies of the current figures
-    # need updated attrition rate; number of submission in a given year plotted against whether any of the datasets submitted ever published
-    # 2022 = feb 2022-feb2023; need to get years on this scale
-    
+
     "UPDATE_README": ("Metadata", "README"),
-    "UPDATE_NAME": ("Metadata", "Dataset Name"),
+    "UPDATE_NAME": ("Metadata", "Title"),
     "UPDATE_DESCRIPTION": ("Metadata", "Description"),
     "UPDATE_CHANGELOG": ("Metadata", "Changelog"),
     "UPDATE_LICENSE": ("Metadata", "License"),
@@ -143,11 +127,11 @@ EVENT_MAP = {
 
     "UPDATE_METADATA": ("Uncharacterized", "Metadata Blob"),
     "UPDATE_IGNORE_FILES": ("Uncharacterized", "Ignore Files"),
-    "ADD_TAG": ("Metadata", "Add Tag"),
-    "REMOVE_TAG": ("Metadata", "Remove Tag"),
+    "ADD_TAG": ("Metadata", "Keywords & Tags"),
+    "REMOVE_TAG": ("Metadata", "Keywords & Tags"),
 
-    "ADD_CONTRIBUTOR": ("Contributors", "Add"),
-    "REMOVE_CONTRIBUTOR": ("Contributors", "Remove"),
+    "ADD_CONTRIBUTOR": ("Metadata", "Names & Contributors"),
+    "REMOVE_CONTRIBUTOR": ("Metadata", "Names & Contributors"),
 
     "ADD_EXTERNAL_PUBLICATION": ("External Publications", "Add"),
     "REMOVE_EXTERNAL_PUBLICATION": ("External Publications", "Remove"),
@@ -193,10 +177,51 @@ def subcategorize(event_type, detail):
     if event_type == "RENAME_PACKAGE":
         return category, f"Rename: {categorize_rename(detail)}"
     if event_type in ("CREATE_PACKAGE", "DELETE_PACKAGE", "MOVE_PACKAGE", "RESTORE_PACKAGE"):
-        kind = "Folder" if is_folder(detail) else "File"
+        reserved = reserved_file_kind(detail.get("name"))
+        if reserved:
+            kind = reserved
+        else:
+            kind = "Folder" if is_folder(detail) else "File"
         return category, f"{subcat} {kind}"
-    
+
     return category, subcat
+
+
+RECORD_MODEL_EVENTS = {
+    "CREATE_MODEL",
+    "CREATE_MODEL_PROPERTY",
+    "CREATE_RECORD",
+    "UPDATE_RECORD",
+    "DELETE_RECORD",
+}
+
+
+def build_model_name_map(event_data):
+    """Map model uuid -> model name from CREATE_MODEL events in a dataset."""
+    model_names = {}
+    for group in event_data.get("eventGroups", []):
+        for ev in group.get("events", [group.get("event")]):
+            if ev is None or ev.get("eventType") != "CREATE_MODEL":
+                continue
+            detail = ev.get("detail") or {}
+            mid = detail.get("id")
+            name = detail.get("name")
+            if mid and name:
+                model_names[mid] = name
+    return model_names
+
+
+def is_subject_sample_event(event_type, detail, model_names):
+    """True for auto-generated subject/sample record/model events to be excluded."""
+    if event_type not in RECORD_MODEL_EVENTS or not isinstance(detail, dict):
+        return False
+    if event_type == "CREATE_MODEL":
+        name = detail.get("name") or ""
+    elif event_type == "CREATE_MODEL_PROPERTY":
+        name = detail.get("modelName") or ""
+    else:  # *_RECORD: resolve model via modelId map
+        name = model_names.get(detail.get("modelId"), "")
+    return bool(SUBJECT_SAMPLE_MODEL_RE.search(name))
 
 
 def main():
@@ -209,13 +234,14 @@ def main():
     by_curator_total = Counter()
     extension_activity = defaultdict(Counter)    # category -> ext -> count
     per_dataset = defaultdict(Counter)          # dataset_id -> category -> count
-    meta_stats = defaultdict(lambda: {"substantive": 0, "trivial": 0, "magnitude_sum": 0.0})
-    per_dataset_meta = defaultdict(lambda: {"substantive_edits": 0, "trivial_edits": 0, "magnitude_sum": 0.0})
+    per_dataset_metadata = defaultdict(Counter)  # dataset_id -> metadata subcat -> count
 
     total_events = 0
     curator_events = 0
+    excluded_subject_sample = 0
 
     for dataset_id, event_data in data.items():
+        model_names = build_model_name_map(event_data)
         for group in event_data.get("eventGroups", []):
             for ev in group.get("events", [group.get("event")]):
                 if ev is None:
@@ -224,28 +250,17 @@ def main():
                 uid = ev.get("userId")
                 if uid not in CURATORS:
                     continue
-                curator_events += 1
 
                 et = ev.get("eventType", "UNKNOWN")
                 detail = ev.get("detail") or {}
-                category, subcat = subcategorize(et, detail)
 
-                stats = metadata_edit_stats(et, detail)
-                if stats is not None:
-                    trivial, magnitude = stats
-                    base_subcat = subcat
-                    subcat = f"{subcat} ({'Trivial' if trivial else 'Substantive'})"
-                    ms = meta_stats[base_subcat]
-                    pdm = per_dataset_meta[dataset_id]
-                    
-                    if trivial:
-                        ms["trivial"] += 1
-                        pdm["trivial_edits"] += 1
-                    else:
-                        ms["substantive"] += 1
-                        ms["magnitude_sum"] += magnitude
-                        pdm["substantive_edits"] += 1
-                        pdm["magnitude_sum"] += magnitude
+                # Skip auto-generated subject/sample records & models entirely
+                if is_subject_sample_event(et, detail, model_names):
+                    excluded_subject_sample += 1
+                    continue
+
+                curator_events += 1
+                category, subcat = subcategorize(et, detail)
 
                 by_category[category][subcat] += 1
                 by_event_type[et] += 1
@@ -253,6 +268,8 @@ def main():
                 by_curator[curator_name][category] += 1
                 by_curator_total[curator_name] += 1
                 per_dataset[dataset_id][category] += 1
+                if category == "Metadata":
+                    per_dataset_metadata[dataset_id][subcat] += 1
 
                 if et in ["CREATE_PACKAGE", "DELETE_PACKAGE", "MOVE_PACKAGE"]:
                     name = detail.get("name") if isinstance(detail, dict) else None
@@ -265,6 +282,7 @@ def main():
         "totals": {
             "all_events": total_events,
             "curator_events": curator_events,
+            "excluded_subject_sample_events": excluded_subject_sample,
             "datasets_touched_by_curators": len(per_dataset),
         },
         "by_category": {c: dict(sc.most_common()) for c, sc in by_category.items()},
@@ -274,25 +292,8 @@ def main():
             for name, cats in by_curator.items()
         },
         "file_extension_activity": {c: dict(e.most_common()) for c, e in extension_activity.items()},
-        "metadata_churn": {
-            base: {
-                "substantive": v["substantive"],
-                "trivial": v["trivial"],
-                "mean_substantive_magnitude": (
-                    round(v["magnitude_sum"] / v["substantive"], 4) if v["substantive"] else 0.0
-                ),
-            }
-            for base, v in meta_stats.items()
-        },
         "per_dataset": {ds: dict(cats.most_common()) for ds, cats in per_dataset.items()},
-        "per_dataset_metadata_churn": {
-            ds: {
-                "substantive_edits": v["substantive_edits"],
-                "trivial_edits": v["trivial_edits"],
-                "total_magnitude": round(v["magnitude_sum"], 4),
-            }
-            for ds, v in per_dataset_meta.items()
-        },
+        "per_dataset_metadata": {ds: dict(sc.most_common()) for ds, sc in per_dataset_metadata.items()},
     }
 
     with open(OUT, "w", encoding="utf-8") as f:
@@ -300,6 +301,7 @@ def main():
 
     print(f"All Events:      {total_events:>9}")
     print(f"Curator Events:  {curator_events:>9}")
+    print(f"Excluded Subj/Sample: {excluded_subject_sample:>9}")
     print(f"Datasets Touched: {len(per_dataset):>9}")
     print(f"\nwrote categorized output -> {OUT}\n")
 
@@ -309,12 +311,6 @@ def main():
         print(f"\n{category}  ({cat_totals[category]})")
         for subcat, n in by_category[category].most_common():
             print(f"    {n:>8}  {subcat}")
-
-    print("\n> Metadata churn (substantive vs trivial, mean magnitude) <")
-    for base in sorted(meta_stats, key=lambda b: meta_stats[b]["substantive"], reverse=True):
-        v = meta_stats[base]
-        mean_mag = v["magnitude_sum"] / v["substantive"] if v["substantive"] else 0.0
-        print(f"    {base:<12} substantive={v['substantive']:>5}  trivial={v['trivial']:>5}  mean_mag={mean_mag:.3f}")
 
     print("\n> Events by curator <")
     for name, total in by_curator_total.most_common():

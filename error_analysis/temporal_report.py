@@ -359,9 +359,61 @@ class PrincipalInvestigatorReporter(Reporter):
         with open(self.out_path, "w") as f:
             json.dump(self.contributors, f, indent=4)
 
+class SchemaVersionExampleReporter(Reporter):
+    EXAMPLES_PER_VERSION = 3
+
+    def __init__(self, out_path: str):
+        self.examples: dict[str, list[dict]] = defaultdict(list)
+        self.seen: dict[str, set[str]] = defaultdict(set)
+        self.out_path = out_path
+
+    def _version(self, file_data: dict):
+        version = file_data.get("meta", {}).get("template_schema_version")
+        if isinstance(version, list) and version:
+            return version[0]
+        if version:
+            return version
+        ddf = file_data.get("inputs", {}).get("dataset_description_file", {})
+        if isinstance(ddf, list) and ddf:
+            return ddf[0]
+        if isinstance(ddf, dict):
+            return ddf.get("template_schema_version")
+        return None
+
+    def handle(self, file_data: dict):
+        version = self._version(file_data)
+        if not version:
+            return
+        if len(self.examples[version]) >= self.EXAMPLES_PER_VERSION:
+            return
+
+        id = file_data["id"]
+        if id in self.seen[version]:
+            return
+        self.seen[version].add(id)
+
+        timestamp = file_data["prov"]["timestamp_export_start"]
+        dataset_uuid = id.split(":")[2]
+        safe_timestamp = timestamp.replace(":", "")
+        url = f"https://cassava.ucsd.edu/sparc/datasets/{dataset_uuid}/{safe_timestamp}.tar.xz"
+
+        self.examples[version].append({
+            "id": id,
+            "timestamp_export_start": timestamp,
+            "url": url,
+        })
+
+    def finish(self):
+        with open(self.out_path, "w") as f:
+            json.dump(self.examples, f, indent=4)
+        total = sum(len(v) for v in self.examples.values())
+        
+        print(f"Collected {total} examples across {len(self.examples)} schema versions")
+
 if __name__ == "__main__":
     reporters: list[Reporter] = [
         TemporalReporter("./temporal_report.json", "./dropped_errors.txt"),
+        SchemaVersionExampleReporter("./schema_version_examples.json"),
         # PathErrorReporter("./path_errors.txt"),
         # UrlIdentifierReporter("dataset_relations.csv")
         # PrincipalInvestigatorReporter("principal_investigator_frequency.json"),

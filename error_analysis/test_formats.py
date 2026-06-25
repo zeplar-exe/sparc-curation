@@ -10,7 +10,7 @@ import json
 from error_info_to_json import main as regenerate_errors
 import regex
 
-IN = ["./all-the-all-the-errors", "./cassava_errors", "./dropped_errors.txt", "./path_errors.txt"][3]
+IN = ["./all-the-all-the-errors", "./cassava_errors", "./dropped_errors.txt", "./path_errors.txt"][2]
 INFO_JSON = "./error-info.json"
 OUT_CSV = "./format-matches.csv"
 OUT_RE = "./format-regexes.txt"
@@ -84,11 +84,16 @@ formats: list[Format] = []
 def _load_formats(info_json: str, include_source: bool = False, do_log: bool = False):
     if len(formats) > 0:
         return
+    
     with open(info_json) as f:
         for i, item in enumerate(json.load(f)):
             try:
                 f = item["format"]
                 pattern = _fstring_to_regex(f, include_source=include_source)
+                
+                if do_log:
+                    print(f"Loaded format {i}: {item['description']} -> {pattern.pattern}")
+                
                 formats.append(Format(item["id"], item["source"], pattern, item["description"]))
             except Exception as e:
                 if do_log:
@@ -167,7 +172,7 @@ if __name__ == "__main__":
     if not args.no_regenerate:
         regenerate_errors()
 
-    _load_formats(args.info_json)
+    _load_formats(args.info_json, do_log=not args.no_log)
 
     with open(args.input) as f:
         lines = [l.strip() for l in f.readlines()]
