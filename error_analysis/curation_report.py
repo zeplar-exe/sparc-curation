@@ -19,52 +19,63 @@ SPARCUR_UPDATES = "./sparcur_updates.csv"
 CURATION_CLUSTERS = "./pennsieve_curation_clusters.json"
 CURATOR_CATEGORIES = "./curator_event_categories.json"
 
-CURATOR_IDS = {589, 832, 1554, 1186, 531, 600, 601, 611}
+CURATOR_IDS = {
+    # 589, 
+    832, 
+    1554, 
+    1186, 
+    531, 
+    # 600, 
+    # 601, 
+    611
+}
 
 # Whether to use error_index_graph or error_graph for Metric 1
 USE_ERROR_INDEX_GRAPH = True
 
-EXCLUDED_DATASET_IDS = [
-    # Reva + Others
-    "N:dataset:aa43eda8-b29a-4c25-9840-ecbd57598afc",
-    "N:dataset:bc4cc558-727c-4691-ae6d-498b57a10085",
-    "N:dataset:ec6ad74e-7b59-409b-8fc7-a304319b6faf",
-    "N:dataset:04a5fed9-7ba6-4292-b1a6-9cab5c38895f",
-    "N:dataset:a8b2bdc7-54df-46a3-810e-83cdf33cfc3a",
-    "N:dataset:2a3d01c0-39d3-464a-8746-54c9d67ebe0f",
-    "N:dataset:5c7b9f9d-eeda-4370-a5b8-892020f863c2",
-    "N:dataset:33a9f81e-1deb-4c2c-922a-f9eac47ed3e5",
-    "N:dataset:1c929cf2-213a-45ed-a867-47a7864c83eb",
-    "N:dataset:7a542123-ce8d-4f53-9b74-d259958db1ea",
-    "N:dataset:e225ea82-54b5-457f-ad3d-faa640eb13be",
-    "N:dataset:bd90e81f-fb33-40ce-93e1-44875efde91b",
-    "N:dataset:ffd05134-0014-4fd2-bd10-582499404dc5",
-    "N:dataset:edef88f3-bc7c-4105-a104-c12e05b16be9",
-    "N:dataset:c5edefba-732d-4c5e-a66c-9081d6885b9e",
-    "N:dataset:614ca71d-863f-4bb3-959e-e74e814d8e1a",
-    "N:dataset:1d116ae9-5eb7-491c-98bf-6f612ddf13e5",
-    "N:dataset:984585fb-b280-4cbb-b18d-3b73542e8590",
-    "N:dataset:9eb5e0ff-d6fc-404f-9c76-d5f0a3c3dc02",
-    "N:dataset:300fd03e-2dac-4460-a2b7-c24185b7ff07",
-    "N:dataset:07a18a83-b044-4042-a4d1-5d472f538a11",
-    "N:dataset:8a9ca6e0-12d5-454f-8605-37bbc25d696d",
-    "N:dataset:b2573d78-669a-45c5-8af5-8c7df31239ab",
-    "N:dataset:96f68ecf-06d7-4207-a413-a0d931552ac7",
-    "N:dataset:ae2b1bf9-227b-4eba-b2e2-9fca2897624f",
-    
-    # Test Datasets
-    "N:dataset:41ca18b1-c991-4709-892e-8ae98907549b"
-]
-
+EXCLUDED_DATASET_IDS = []
 WHITELIST_DATASET_IDS = []
 
-with open("./big-did.json") as f:
-    for entry in json.load(f):
-        WHITELIST_DATASET_IDS.append(entry)
+# we should look over the categorization code; particularly metadata and add/remove_contributor
+# what about styling by the way?
+# metadata type mix: would be helpful to havae n=X metrics per year; same for event mix
 
+
+# we gotta send the new time to publish graph in the slack!!!
+# ignore all errors that path from #/inputs/
+# need to separate errors by path
+    # put the last two errors in dropped_errors.txt into the slack under no idea
+    # errors that don't have a path
+    # null patah errors get grouped under "this occured with no path"
+# exclude all missing required tsrXb_ABC errors
+# april 1st 2022 - april 1st 2026 for errors
+    # check if this loses events
+# make a table of errors X datasets; 1 or 0 on existence to make a frequency table
+    # separate datasets by template version
+    
+# should I remove dataset/org ids from the files? for OSINT purposes?
+
+with open("./dataset_exclusion_list.csv") as f:
+    for row in csv.DictReader(f):
+        EXCLUDED_DATASET_IDS.append(row["Dataset ID"])
+
+with open("./big-did.json") as f:
+    SPARC_ORGANIZATION = "organization:618e8dd9-f8d2-4dc4-9abb-c6aaab2e78a0"
+    
+    data = json.load(f)
+    for id, entry in data.items():
+        if entry["id_organization"] == SPARC_ORGANIZATION:
+            WHITELIST_DATASET_IDS.append(id)
+
+
+print(f"Loaded {len(EXCLUDED_DATASET_IDS)} excluded datasets and {len(WHITELIST_DATASET_IDS)} whitelisted datasets.")
 
 def is_excluded_dataset(dataset_id):
-    return dataset_id in EXCLUDED_DATASET_IDS and dataset_id not in WHITELIST_DATASET_IDS
+    if dataset_id.startswith("dataset:"):
+        dataset_id = "N:" + dataset_id
+    elif not dataset_id.startswith("N:dataset:"):
+        dataset_id = "N:dataset:" + dataset_id
+    return dataset_id in EXCLUDED_DATASET_IDS or dataset_id not in WHITELIST_DATASET_IDS
 
 
 def parse_iso8601(date_str):
@@ -217,6 +228,35 @@ def last_error_types_at_or_before(target_ts, error_graph):
     return counts or None
 
 
+def _positive_error_counts(errors):
+    if not errors:
+        return None
+    counts = {error_type: int(count) for error_type, count in errors.items() if count > 0}
+    return counts or None
+
+
+def error_types_near(target_ts, error_graph):
+    items = sorted(((int(ts_str), errors) for ts_str, errors in error_graph.items()), key=lambda item: item[0])
+    
+    if not items:
+        return None
+
+    chosen = None
+    found = False
+    for ts_int, errors in items:
+        if ts_int <= target_ts:
+            chosen = errors
+            found = True
+        else:
+            break
+
+    if not found:
+        # Request predates the first export: use the earliest export after it.
+        chosen = items[0][1]
+
+    return _positive_error_counts(chosen)
+
+
 def plot_error_types_by_year(records, title, normalize=False):
     if not records:
         return
@@ -347,6 +387,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             for event in events:
                 if event.get("incomplete"):
                     continue
+                
                 req_created = event.get("request_created")
                 pub_created = event.get("accept_created")
                 
@@ -444,7 +485,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             req_date = first_request_date(dataset_id, event_sequences)
             
             if req_date:
-                req_types = drop_excluded_error_types(last_error_types_at_or_before(int(req_date.timestamp()), error_graph))
+                req_types = drop_excluded_error_types(error_types_near(int(req_date.timestamp()), error_graph))
                 if req_types:
                     for error_type, count in req_types.items():
                         first_request_error_type_records.append({"year": fiscal_year(req_date), "type": error_type, "count": count})
@@ -452,13 +493,13 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             pub_date = first_publication_date(dataset_id, event_sequences)
             
             if pub_date:
-                pub_types = drop_excluded_error_types(last_error_types_at_or_before(int(pub_date.timestamp()), error_graph))
+                pub_types = drop_excluded_error_types(error_types_near(int(pub_date.timestamp()), error_graph))
                 if pub_types:
                     for error_type, count in pub_types.items():
                         publication_error_type_records.append({"year": fiscal_year(pub_date), "type": error_type, "count": count})
         
-        plot_error_types_by_year(first_request_error_type_records, "Top 10 Error Types at First Request by Year")
-        plot_error_types_by_year(publication_error_type_records, "Top 10 Error Types at Publication by Year")
+        plot_error_types_by_year(first_request_error_type_records, "Top 10 Error Types at First Request by Year", normalize=True)
+        plot_error_types_by_year(publication_error_type_records, "Top 10 Error Types at Publication by Year", normalize=True)
 
     def metric_1c_removed_errors(temporal_report, event_sequences):
         removed_error_type_records = []
@@ -472,8 +513,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             if not req_date or not pub_date:
                 continue
             
-            req_types = drop_excluded_error_types(last_error_types_at_or_before(int(req_date.timestamp()), error_graph))
-            pub_types = drop_excluded_error_types(last_error_types_at_or_before(int(pub_date.timestamp()), error_graph))
+            req_types = drop_excluded_error_types(error_types_near(int(req_date.timestamp()), error_graph))
+            pub_types = drop_excluded_error_types(error_types_near(int(pub_date.timestamp()), error_graph))
             
             if not req_types:
                 continue
@@ -507,14 +548,14 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             pub_date = first_publication_date(dataset_id, event_sequences)
             
             if req_date:
-                req_types = drop_excluded_error_types(last_error_types_at_or_before(int(req_date.timestamp()), error_graph))
+                req_types = drop_excluded_error_types(error_types_near(int(req_date.timestamp()), error_graph))
                 req_records.append({
                     "dataset_id": dataset_id,
                     "year": fiscal_year(req_date),
                     "error_type_count": len(req_types) if req_types else 0,
                 })
             if pub_date:
-                pub_types = drop_excluded_error_types(last_error_types_at_or_before(int(pub_date.timestamp()), error_graph))
+                pub_types = drop_excluded_error_types(error_types_near(int(pub_date.timestamp()), error_graph))
                 pub_records.append({
                     "dataset_id": dataset_id,
                     "year": fiscal_year(pub_date),
@@ -617,6 +658,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             pub = first_publication_date(dsid, event_sequences)
             
             if req and pub and pub > req:
+                #if (pub - req).days > 100:
+                #    continue
                 durations_by_year[fiscal_year(req)].append({"year": fiscal_year(req), "duration": (pub - req).days, "id": dsid, "publication_date": pub})
             
             if not pub and req:
@@ -1155,7 +1198,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 continue
             
             pub_types = drop_excluded_error_types(
-                last_error_types_at_or_before(int(pub_date.timestamp()), error_graph)
+                error_types_near(int(pub_date.timestamp()), error_graph)
             )
             
             if pub_types:
@@ -1165,7 +1208,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             req_date = first_request_date(dataset_id, event_sequences)
             if req_date:
                 req_types = drop_excluded_error_types(
-                    last_error_types_at_or_before(int(req_date.timestamp()), error_graph)
+                    error_types_near(int(req_date.timestamp()), error_graph)
                 )
                 if req_types:
                     for error_type in set(req_types):
@@ -1200,7 +1243,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 continue
             for pub_date in publication_dates(dataset_id, event_sequences)[1:]:
                 pub_types = drop_excluded_error_types(
-                    last_error_types_at_or_before(int(pub_date.timestamp()), error_graph)
+                    error_types_near(int(pub_date.timestamp()), error_graph)
                 )
                 if pub_types:
                     for error_type, count in pub_types.items():
@@ -1217,7 +1260,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 continue
             for pub_date in publication_dates(dataset_id, event_sequences)[1:]:
                 pub_types = drop_excluded_error_types(
-                    last_error_types_at_or_before(int(pub_date.timestamp()), error_graph)
+                    error_types_near(int(pub_date.timestamp()), error_graph)
                 )
                 pub_records.append({
                     "dataset_id": dataset_id,
@@ -1235,14 +1278,14 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         fig.show()
 
     metric_toggles = {
-        "metric_1_standards_adherence": True,
+        "metric_1_standards_adherence": False,
         "metric_1b_error_types": False,
         "metric_1c_removed_errors": False,
-        "metric_1d_error_type_counts": True,
-        "metric_1e_top_error_types": True,
-        "metric_1b_subsequent_pub": True,
-        "metric_1d_subsequent_pub": True,
-        "metric_2_time_to_publication": False,
+        "metric_1d_error_type_counts": False,
+        "metric_1e_top_error_types": False,
+        "metric_1b_subsequent_pub": False,
+        "metric_1d_subsequent_pub": False,
+        "metric_2_time_to_publication": True,
         "metric_2b_quarters_to_publication": False,
         "metric_3_event_types": False,
         "metric_4_total_curation_events": False,
@@ -1252,9 +1295,13 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         "metric_4e_total_gaps_per_dataset": False,
         "metric_5_datasets_vs_clusters": False,
         "metric_6_avg_cluster_length": False,
-        "metric_7_category_mix_by_year": True,
-        "metric_7b_metadata_types_by_pub_year": True,
+        "metric_7_category_mix_by_year": False,
+        "metric_7b_metadata_types_by_pub_year": False,
     }
+    
+    #for i, k in enumerate(metric_toggles): 
+    #    if i != 3: 
+    #       metric_toggles[k] = False
 
     if metric_toggles.get("metric_1_standards_adherence"):
         metric_1_standards_adherence(temporal_report, event_sequences, sparcur_updates)
@@ -1295,7 +1342,3 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
     if metric_toggles.get("metric_7b_metadata_types_by_pub_year"):
         metric_7b_metadata_types_by_pub_year(curator_categories, event_sequences)
         
-        
-        
-        # get links back to cassava in temporal_report.json
-        # fix exclusion list

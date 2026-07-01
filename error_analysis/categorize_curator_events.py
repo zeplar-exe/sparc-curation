@@ -7,24 +7,14 @@ IN = "./pennsieve-event-data-2026-05-12T020310Z.json"
 OUT = "./curator_event_categories.json"
 
 CURATORS = {
-    589: "Tom",
+    # 589: "Tom",
     832: "Anka",
     1554: "Anka (alt)",
     1186: "Marlena",
     531: "Anita",
-    600: "Jeff",
-    601: "Jeff (ncmir)",
+    # 600: "Jeff",
+    # 601: "Jeff (ncmir)",
     611: "Maryann",
-}
-
-KNOWN_EXTENSIONS = {
-    "tif", "tiff", "jpg", "jpeg", "jp2", "jpx", "png", "gif", "bmp", "svg",
-    "czi", "lsm", "nd2", "ims", "ima", "oib", "oif", "lif", "vsi", "ndpi",
-    "xlsx", "xls", "csv", "tsv", "txt", "json", "xml", "docx", "doc", "pdf",
-    "rtf", "md", "dat", "mat", "h5", "hdf5", "nwb", "npy", "npz", "db",
-    "sqlite", "ini", "cfg", "log", "results", "pss", "psmethod", "txe", "ext",
-    "avi", "mp4", "mov", "mkv", "wav", "mp3", "zip", "gz", "tar", "rar", "7z",
-    "py", "m", "r", "ipynb", "sh", "yaml", "yml", "abf", "smr", "edf",
 }
 
 # RENAME_PACKAGE fixes to SDS format
@@ -47,7 +37,7 @@ RESERVED_FILE_KINDS = (
     ("readme", "README"),
 )
 
-# Records & models whose model is auto-generated subject/sample metadata
+# Records + models where model is auto-generated subject/sample metadata
 SUBJECT_SAMPLE_MODEL_RE = re.compile(r"subject|sample", re.IGNORECASE)
 
 
@@ -77,8 +67,7 @@ def split_ext(name):
     
     if "." in base:
         stem, candidate = base.rsplit(".", 1)
-        if candidate.lower() in KNOWN_EXTENSIONS:
-            return stem, candidate.lower()
+        return stem, candidate.lower()
     
     return base, ""
 
@@ -219,7 +208,7 @@ def is_subject_sample_event(event_type, detail, model_names):
         name = detail.get("name") or ""
     elif event_type == "CREATE_MODEL_PROPERTY":
         name = detail.get("modelName") or ""
-    else:  # *_RECORD: resolve model via modelId map
+    else:
         name = model_names.get(detail.get("modelId"), "")
     return bool(SUBJECT_SAMPLE_MODEL_RE.search(name))
 
@@ -254,7 +243,7 @@ def main():
                 et = ev.get("eventType", "UNKNOWN")
                 detail = ev.get("detail") or {}
 
-                # Skip auto-generated subject/sample records & models entirely
+                # Skip auto-generated subject/sample records/models entirely
                 if is_subject_sample_event(et, detail, model_names):
                     excluded_subject_sample += 1
                     continue

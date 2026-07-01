@@ -11,13 +11,13 @@ with open(IN, "r", encoding="utf-8") as f:
 all_events = defaultdict(list)
 
 relevant_users = [
-    589, # Tom 
+    # 589, # Tom 
     832, # Anka
     1554, # Anka alt unused
     1186, # Marlena
     531, # Anita
-    600, # Jeff
-    601, # Jeff (ncmir)
+    # 600, # Jeff
+    # 601, # Jeff (ncmir)
     611, # Maryann
 ]
 

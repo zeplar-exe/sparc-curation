@@ -104,8 +104,7 @@ class TemporalReporter(Reporter):
     class DatasetReport:
         id: str
         status_counts: Counter = field(default_factory=Counter)
-        first_requested_url: str | None = None
-        first_requested_timestamp: int | None = None
+        export_urls: list[dict] = field(default_factory=list)
         error_graph: dict[int, Counter] = field(default_factory=lambda: defaultdict(Counter))
         error_index_graph: dict[int, int] = field(default_factory=lambda: defaultdict(int))
         curation_index_graph: dict[int, int] = field(default_factory=lambda: defaultdict(int))
@@ -120,12 +119,11 @@ class TemporalReporter(Reporter):
             return {
                 "id": self.id,
                 "status_counts": dict(self.status_counts),
-                "first_requested_url": self.first_requested_url,
-                "first_requested_timestamp": self.first_requested_timestamp,
-                "error_graph": {str(ts): dict(counter) for ts, counter in self.error_graph.items()},
-                "error_index_graph": {str(ts): index for ts, index in self.error_index_graph.items()},
-                "curation_index_graph": {str(ts): index for ts, index in self.curation_index_graph.items()},
-                "submission_index_graph": {str(ts): index for ts, index in self.submission_index_graph.items()},
+                "export_urls": sorted(self.export_urls, key=lambda x: x["unix_timestamp"]),
+                "error_graph": dict(sorted({str(ts): dict(counter) for ts, counter in self.error_graph.items()}.items())),
+                "error_index_graph": dict(sorted({str(ts): index for ts, index in self.error_index_graph.items()}.items())),
+                "curation_index_graph": dict(sorted({str(ts): index for ts, index in self.curation_index_graph.items()}.items())),
+                "submission_index_graph": dict(sorted({str(ts): index for ts, index in self.submission_index_graph.items()}.items())),
                 "dropped_errors": self.dropped_errors,
                 "is_precision": self.is_precision,
                 "is_sparc": self.is_sparc,
@@ -167,13 +165,16 @@ class TemporalReporter(Reporter):
         report.curation_index_graph[unix_timestamp] = file_data.get("status", {}).get("curation_index", -1)
         report.submission_index_graph[unix_timestamp] = file_data.get("status", {}).get("submission_index", -1)
         
-        if status == "requested":
-            dataset_uuid = id.split(":")[2]
-            safe_timestamp = timestamp.replace(":", "")
-            url = f"https://cassava.ucsd.edu/sparc/datasets/{dataset_uuid}/{safe_timestamp}.tar.xz"
-            if report.first_requested_timestamp is None or unix_timestamp < report.first_requested_timestamp:
-                report.first_requested_timestamp = unix_timestamp
-                report.first_requested_url = url
+        dataset_uuid = id.split(":")[2]
+        safe_timestamp = timestamp.replace(":", "")
+        url = f"https://cassava.ucsd.edu/sparc/datasets/{dataset_uuid}/{safe_timestamp}.tar.xz"
+        
+        report.export_urls.append({
+            "url": url,
+            "timestamp": timestamp,
+            "unix_timestamp": unix_timestamp,
+            "status": status,
+        })
 
         if org := result.get("meta", {}).get("id_organization"):
             if org == PRECISION_ID:
@@ -242,7 +243,7 @@ class TemporalReporter(Reporter):
                 self.dropped_error_file.write(f"{id}\t Timed out matching '{err.replace("\n", "\\n")}'\n")
         self.dropped_error_file.flush()
     
-    def finish(self):
+    def finish(self):    
         with open(self.out_path, "w") as f:
             json.dump({id: report.to_json_dict() for id, report in self.reports.items()}, f, indent=4)
         
@@ -413,8 +414,8 @@ class SchemaVersionExampleReporter(Reporter):
 if __name__ == "__main__":
     reporters: list[Reporter] = [
         TemporalReporter("./temporal_report.json", "./dropped_errors.txt"),
-        SchemaVersionExampleReporter("./schema_version_examples.json"),
-        # PathErrorReporter("./path_errors.txt"),
+        # SchemaVersionExampleReporter("./schema_version_examples.json"),
+        PathErrorReporter("./path_errors.txt"),
         # UrlIdentifierReporter("dataset_relations.csv")
         # PrincipalInvestigatorReporter("principal_investigator_frequency.json"),
     ]

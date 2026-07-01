@@ -1,0 +1,7 @@
+*.twb
+*.twbr
+*.txt
+*.json
+*.csv
+**/.DS_Store
+../**/.DS_Store
