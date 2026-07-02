@@ -3,5 +3,3 @@
 *.txt
 *.json
 *.csv
-**/.DS_Store
-../**/.DS_Store

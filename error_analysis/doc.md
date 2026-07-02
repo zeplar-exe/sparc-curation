@@ -1,4 +1,6 @@
-# General Curation Export Error Matching/Classification
+# Error Analysis Codebase Documentation
+
+## General Curation Export Error Matching/Classification
 
 Relevant Code Files:
 - test_format.py
@@ -35,7 +37,7 @@ Relevant Resource/Generated Files (assumes unchanged configuration):
 NOTE: All downstream error-based operations (such as TemporalReporter) depend on test_format.py, and thus depend on error-info.json/error-info.txt
 
 
-# Cassava Dataset Syncing
+## Cassava Dataset Syncing
 
 Relevant Code Files:
 - unzip_cassava.py
@@ -57,7 +59,7 @@ Relevant Resource/Generated Files (assumes unchanged configuration):
     Created by cassava_crawler.js
 
 
-# Cassava Dataset Analysis
+## Cassava Dataset Analysis
 
 Relevant Code Files:
 - temporal_report.py
@@ -98,7 +100,7 @@ Relevant Resource/Generated Files (assumes unchanged configuration):
 - identifiers_for_soda_processed_datasets_marked_as_published.csv
     Used by temporal_report.py (TemporalReporter module)
 
-# Pennsieve Event Data Analysis
+## Pennsieve Event Data Analysis
 
 Relevant Code Files:
 - read_pennsieve_series.py
@@ -129,7 +131,7 @@ Relevant Resource/Generated Files (assumes unchanged configuration):
     Contains every dataset and extrapolated estimates of continuous curation sessions
 
 
-# Data Visualization
+## Data Visualization
 
 Relevant Code Files:
 - curation_report.py
@@ -151,3 +153,23 @@ Relevant Resource/Generated Files (assumes unchanged configuration):
 - sparcur_updates.csv
     Used by curation_report.py
     Contains names and dates of sparcur releases
+
+
+# Pipeline Instructions
+
+## Testing error-info.txt on a File of Errors
+
+
+## Scraping Cassava
+
+
+## Producing a Report of Errors over Time
+
+
+### Extra: Importing into Tableau
+
+
+## Generating a Curation Report
+
+
+## Analyzing Curation Events (pennsieve) and Clusters

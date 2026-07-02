@@ -3,7 +3,7 @@ schemas.py 575,23:         raise exc.ValidationError(errors)
     jsonschema validator output (error.message from each self.validator.iter_errors(appstruct) item)
 objects.py 891,29:         raise exc.ExtractionValidationError(msg)
     Raises for missing "type", "__extract_version_", "remote_id", "object_type", "contents" on dataset blob; Caught in upstream addError
-    f'validate failed for\n{json.dumps(blob, sort_keys=True, indent=2, cls=JEncode)}\n'
+    f'validate failed for\n{json}\n'
 converters.py 182,25:      if self.addError(msg, pipeline_stage=self.__class__.__name__ + '.export-error'):
     Unhandled field in class during serialization of triples
     f'Unhandled {self.__class__.__name__} field: {field}'
@@ -54,7 +54,7 @@ datasets.py 999:           if self.addError(msg,
     f'{emptyrs} empty rows detected in {path}'
 datasets.py 1020:          if self.addError(exc.EncodingError(message),
     xlsx workbook has more than one sheet (schema expects one tab); wrapped in exc.EncodingError(...)
-    f'too many sheets ({ns}) in {posix_path}'
+    f'too many sheets ({num_sheets}) in {posix_path}'
 datasets.py 1038:          if self.addError(exc.EncodingError(message),
     xlsx2csv converter structural weirdness (AttributeError path); wrapped in exc.EncodingError(...)
     f'xlsx2csv: major sheet weirdness (probably a bug in the xlsx2csv converter)? in {path}'
@@ -348,28 +348,13 @@ idlib
     f'Not a protocols.io id: {url}'
 idlib
     protocols.io URL link placeholder in a manifest or record
-    f'(\'link1\', None, None, None)'
-idlib
-    protocols.io URL link placeholder in a manifest or record
-    f'(\'URL link\', None, None, None)'
-idlib
-    protocols.io or related text placeholder in a manifest or record
-    f'(\'Also TBD\', None, None, None)'
-idlib
-    Tabular spreadsheet header text placeholder in protocol metadata
-    f'(\'Intraductal infusion protocol\', None, None, None)'
-idlib
-    protocols.io or URL-like placeholder value in a manifest/record
-    f'(\'google.com\', None, None, None)'
-idlib
-    protocols.io or URL-like placeholder value in a manifest/record
-    f'(\'reddit.com\', None, None, None)'
+    f'({link}, None, None, None)'
 idlib
     Missing protocols.io credentials file
     f"[Errno 2] No such file or directory: '/var/lib/sparc/.config/pyontutils/protocols-io-creds.json'"
 error UNK
     Entities with double mapping detected in record hierarchy
-    f'There are entities with double mapping via directory name and manifest! {entities}'
+    f'There are entities with double mapping via directory name and manifest!\n{entities}'
 error UNK
     Python ValueError on int() conversion
     f'invalid literal for int() with base 10: {value}'
@@ -393,7 +378,7 @@ datasets.py 1593:         raise KeyError(msg)
     f'Could not find record primary key for alt_header in "{path}"  metadata_element not in [\'TEMPA_0\', \'species\', \'sex\', \'age_category\', \'age_range_min\', \'age_range_max\', \'age\', \'disability_disease\', \'handedness\', \'strain\', \'rrid_for_strain\', \'genotype\', \'experiment\', \'virus\', \'manufacturer\', \'virus_catalog_number\', \'specimen\', \'slice_preparation\', \'specimen_anatomical_location_1\', \'slice_thickness_microns_1\', \'specimen_anatomical_location_2\', \'slice_thickness_microns_2\', \'specimen_anatomical_location_3\', \'slice_thickness_microns_3\', \'protocol_title\', \'protocol_url_or_doi\', \'software\', \'software_version\', \'software_vendor\', \'microscope\', \'objective\', \'reporter1\', \'reporter1_population\', \'reporter1__detection_filter\', \'reporter2\', \'reporter2_population\', \'reporter2__detection_filter\', \'reporter3\', \'reporter3_population\', \'reporter3__detection_filter\', \'file\', \'scaling\']'
 datasets.py 133:          raise exc.MalformedHeaderError(msg)
     Tabular header duplicate-entries variant (explicit duplicate list format)
-    f'Original header is not unique. Duplicate entries: {duplicates}'
+    f'Original header is not unique.\nDuplicate entries: {duplicates}'
 datasets.py 1813:         if self.addError
     Common cells detected between alt header and header
     f"Common cells between alt header and header! {cells}"
@@ -409,3 +394,9 @@ error UNK
 datasets.py 1813:          if self.addError(e, pipeline_stage='MetadataFile._headers', ...)
     Aggregated malformed-header conditions (null/dupes/common cells/PK issues); exc.MalformedHeaderError('; '.join([e.args[0] for e in errors]))
     f'MalformedHeaderError({message})'
+error UNK
+    Trailing whitespace notification
+    f'trailing whitespace in {src}'
+error UNK
+    Python Errno 24
+    f'[Errno 24] No file descriptors available: {file}'

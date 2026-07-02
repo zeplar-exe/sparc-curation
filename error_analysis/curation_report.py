@@ -40,18 +40,20 @@ WHITELIST_DATASET_IDS = []
 # what about styling by the way?
 # metadata type mix: would be helpful to havae n=X metrics per year; same for event mix
 
+# also need to ask: is my collect() function double counting?
 
-# we gotta send the new time to publish graph in the slack!!!
-# ignore all errors that path from #/inputs/
-# need to separate errors by path
-    # put the last two errors in dropped_errors.txt into the slack under no idea
-    # errors that don't have a path
-    # null patah errors get grouped under "this occured with no path"
-# exclude all missing required tsrXb_ABC errors
-# april 1st 2022 - april 1st 2026 for errors
+
+# + ignore all errors that path from #/inputs/
+# + need to separate errors by path
+    # + put the last two errors in dropped_errors.txt into the slack under no idea
+    # + errors that don't have a path?
+    # + null path errors get grouped under "this occured with no path"
+# + exclude all missing required tsrXb_ABC errors
+
+# + april 1st 2022 - april 1st 2026 for errors
     # check if this loses events
-# make a table of errors X datasets; 1 or 0 on existence to make a frequency table
-    # separate datasets by template version
+# + make a table of errors X datasets; 1 or 0 on existence to make a frequency table
+    # separate datasets by template version when we add that data...
     
 # should I remove dataset/org ids from the files? for OSINT purposes?
 
@@ -98,15 +100,29 @@ def fiscal_year(dt):
 with open("./error-info.json") as _ef:
     _error_info = {entry["id"]: entry["description"] for entry in json.load(_ef)}
 EXCLUDED_ERROR_DESCRIPTIONS = [
-    _error_info[i] for i in (89, 90, 23, 24, 25, 26, 39, 40, 41, 67, 106, 131)
+    _error_info[i] for i in (9, 132, 16, 89, 90, 23, 24, 25, 26, 39, 40, 41, 67, 106, 131, 129)
 ] # see error-info.json
+EXCLUDED_ERROR_TYPES = [
+    "JSON value does not match Regex regex(^(OT2OD|OT3OD|U18|TR|U01))",
+    "Required JSON property is missing from JSON required('contributor_count')",
+    "Required JSON property is missing from JSON required('description')",
+    "Required JSON property is missing from JSON required('manifest_records')",
+    "Required JSON property is missing from JSON required('path_metadata')",
+    "Required JSON property is missing from JSON required('submission_file')",
+    "Required JSON property is missing from JSON required('tsr",
+    "Required JSON property is missing from JSON required('modality')",
+    "Required JSON property is missing from JSON required('organ')",
+    "Required JSON property is missing from JSON required('techniques')",
+    "JSON value value is of incorrect type expected_type(array)"
+]
 
 
 def is_excluded_error_type(error_type):
     return any(
         error_type == base or error_type.startswith(base + " ")
         for base in EXCLUDED_ERROR_DESCRIPTIONS
-    )
+    ) or any(error_type == et for et in EXCLUDED_ERROR_TYPES) \
+        or "inputs/" in error_type
 
 
 def drop_excluded_error_types(error_types):
@@ -138,12 +154,16 @@ def publication_dates(dataset_id, event_sequences):
 
 
 def first_request_date(dataset_id, event_sequences):
+    min_date = datetime.datetime(2022, 4, 1, tzinfo=datetime.timezone.utc)
+    
     events = event_sequences.get(dataset_id)
+    
     if not events:
         return None
 
     request_dates = [parse_iso8601(event.get("request_created")) for event in events]
-    request_dates = [request_date for request_date in request_dates if request_date]
+    request_dates = [request_date for request_date in request_dates if request_date and request_date >= min_date]
+    
     if not request_dates:
         return None
 
@@ -1277,14 +1297,79 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         )
         fig.show()
 
+    def metric_1f_error_dataset_matrix(temporal_report, event_sequences):
+        per_dataset = {}
+        type_counts = Counter()
+        
+        for dataset_id, dataset_record in temporal_report.items():
+            if is_excluded_dataset(dataset_id):
+                continue
+            
+            error_graph = dataset_record.get("error_graph", {})
+            pub_date = first_publication_date(dataset_id, event_sequences)
+            
+            if not error_graph or not pub_date:
+                continue
+            
+            pub_types = drop_excluded_error_types(error_types_near(int(pub_date.timestamp()), error_graph))
+            
+            if not pub_types:
+                continue
+            
+            types = set(pub_types)
+            per_dataset[dataset_id] = types
+            
+            for error_type in types:
+                type_counts[error_type] += 1
+        
+        if not per_dataset:
+            return
+
+        error_types = [t for t, _ in type_counts.most_common()]
+        datasets = sorted(per_dataset, key=lambda d: len(per_dataset[d]), reverse=True)
+
+        row_index = {t: i for i, t in enumerate(error_types)}
+        col_index = {d: j for j, d in enumerate(datasets)}
+        matrix = np.zeros((len(error_types), len(datasets)), dtype=int)
+        
+        for dataset_id, types in per_dataset.items():
+            col = col_index[dataset_id]
+            for error_type in types:
+                matrix[row_index[error_type], col] = 1
+
+        y_labels = [f"{t}  (n={type_counts[t]})" for t in error_types]
+        x_labels = [d.replace("N:dataset:", "") for d in datasets]
+
+        fig = px.imshow(
+            matrix,
+            x=x_labels,
+            y=y_labels,
+            color_continuous_scale=[[0, "#f4f4f4"], [1, "steelblue"]],
+            aspect="auto",
+            title=f"Error Type × Dataset Existence at Publication "
+                  f"({len(datasets)} datasets × {len(error_types)} error types)",
+        )
+        
+        fig.update_traces(xgap=1, ygap=1, hovertemplate="dataset=%{x}<br>error=%{y}<br>present=%{z}<extra></extra>")
+        fig.update_xaxes(showticklabels=True, tickangle=90, tickfont=dict(size=6), title="Dataset", side="top")
+        fig.update_yaxes(tickfont=dict(size=8), title="Error Type (n = # datasets)", autorange="reversed")
+        fig.update_layout(
+            coloraxis_showscale=False,
+            width=max(1400, len(datasets) * 14 + 500),
+            height=max(700, len(error_types) * 18 + 260),
+            margin=dict(l=480, t=220),
+        )
+        fig.show()
+
     metric_toggles = {
         "metric_1_standards_adherence": False,
         "metric_1b_error_types": False,
         "metric_1c_removed_errors": False,
-        "metric_1d_error_type_counts": False,
-        "metric_1e_top_error_types": False,
-        "metric_1b_subsequent_pub": False,
-        "metric_1d_subsequent_pub": False,
+        "metric_1d_error_type_counts": True,
+        "metric_1e_top_error_types": True,
+        "metric_1b_subsequent_pub": True,
+        "metric_1d_subsequent_pub": True,
+        "metric_1f_error_dataset_matrix": True,
         "metric_2_time_to_publication": True,
         "metric_2b_quarters_to_publication": False,
         "metric_3_event_types": False,
@@ -1295,8 +1380,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         "metric_4e_total_gaps_per_dataset": False,
         "metric_5_datasets_vs_clusters": False,
         "metric_6_avg_cluster_length": False,
-        "metric_7_category_mix_by_year": False,
-        "metric_7b_metadata_types_by_pub_year": False,
+        "metric_7_category_mix_by_year": True,
+        "metric_7b_metadata_types_by_pub_year": True,
     }
     
     #for i, k in enumerate(metric_toggles): 
@@ -1317,6 +1402,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         metric_1b_subsequent_pub(temporal_report, event_sequences)
     if metric_toggles.get("metric_1d_subsequent_pub"):
         metric_1d_subsequent_pub(temporal_report, event_sequences)
+    if metric_toggles.get("metric_1f_error_dataset_matrix"):
+        metric_1f_error_dataset_matrix(temporal_report, event_sequences)
     if metric_toggles.get("metric_2_time_to_publication"):
         metric_2_time_to_publication(event_sequences)
     if metric_toggles.get("metric_2b_quarters_to_publication"):

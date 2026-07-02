@@ -103,6 +103,7 @@ class TemporalReporter(Reporter):
     @dataclass
     class DatasetReport:
         id: str
+        template_version: str = "<unknown>"
         status_counts: Counter = field(default_factory=Counter)
         export_urls: list[dict] = field(default_factory=list)
         error_graph: dict[int, Counter] = field(default_factory=lambda: defaultdict(Counter))
@@ -119,6 +120,7 @@ class TemporalReporter(Reporter):
             return {
                 "id": self.id,
                 "status_counts": dict(self.status_counts),
+                "template_version": self.template_version,
                 "export_urls": sorted(self.export_urls, key=lambda x: x["unix_timestamp"]),
                 "error_graph": dict(sorted({str(ts): dict(counter) for ts, counter in self.error_graph.items()}.items())),
                 "error_index_graph": dict(sorted({str(ts): index for ts, index in self.error_index_graph.items()}.items())),
@@ -145,6 +147,19 @@ class TemporalReporter(Reporter):
                 if dataset_id:
                     self.soda_ids.add(dataset_id)
     
+    def _version(self, file_data: dict):
+        version = file_data.get("meta", {}).get("template_schema_version")
+        if isinstance(version, list) and version:
+            return version[0]
+        if version and isinstance(version, str):
+            return version
+        ddf = file_data.get("inputs", {}).get("dataset_description_file", {})
+        if isinstance(ddf, list) and ddf:
+            return ddf[0]
+        if isinstance(ddf, dict):
+            return ddf.get("template_schema_version")
+        return None
+    
     def handle(self, file_data: dict):
         result = file_data
         id = result["id"]
@@ -156,6 +171,7 @@ class TemporalReporter(Reporter):
         inputs = result.get("inputs", {})
         status = inputs.get("remote_dataset_metadata", {}).get("publication", {}).get("status")
         report.status_counts[status] += 1
+        report.template_version = self._version(result) or "<unknown>"
         
         # format: 2023-05-10T20:49:41,892885Z
         timestamp = result["prov"]["timestamp_export_start"]
@@ -186,24 +202,33 @@ class TemporalReporter(Reporter):
         if id in self.soda_ids:
             report.uses_soda = True
             
-        json_errors = set()
+        json_errors = {}
         
         def collect(errors):
             for err in errors:
                 if isinstance(err, list):
                     collect(err)
                 elif isinstance(err, str):
-                    json_errors.add(err)
+                    json_errors[f":{err}"] = (("", err))
                 elif isinstance(err, dict):
                     if message := err.get("message"):
-                        json_errors.add(message)
+                        path = \
+                            "#/" + \
+                            "/".join(["-1" if isinstance(e, int) else e for e in err.get("path", [])])
+                        if isinstance(message, list):
+                            if len(message) > 1:
+                                message = f"{message[0]} (and {len(message)-1} more messages)"
+                            message = message[0] if message else "<empty message>"
+                        key = f"{path}:{message}"
+                        json_errors[key] = (path, message)
         
-        collect(result.get("errors", []))
-        collect(result.get("status", {}).get("submission_errors", []))
-        collect(result.get("status", {}).get("curation_errors", []))
-        
-        for item in result.get("status", {}).get("path_error_report", {}).values():
-            collect(item.get("messages", []))
+        # collect(result.get("errors", []))
+        # collect(result.get("status", {}).get("submission_errors", []))
+        # collect(result.get("status", {}).get("curation_errors", []))
+
+        for path, item in result.get("status", {}).get("path_error_report", {}).items():
+            messages = item.get("messages", [])
+            collect([{"path": path.replace("#/", "").split("/"), "message": msg} for msg in messages])
         
         if inputs:
             for key, item in inputs.items():
@@ -213,11 +238,13 @@ class TemporalReporter(Reporter):
                 else:
                     collect(item.get("errors", []))
         
-        for err in json_errors:
+        for key, (path, err) in json_errors.items():
+            if isinstance(err, list):
+                print(err)
             try:
-                fmt, match = match_error(err)
+                fmt, match = match_error(key)
                 if fmt and match:
-                    d = fmt.description
+                    d = path + ":" + fmt.description
                     try:           
                         d += " regex(" + match.group("regex") + ")"
                     except IndexError:
