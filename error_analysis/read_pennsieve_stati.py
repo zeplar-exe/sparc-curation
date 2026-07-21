@@ -15,10 +15,10 @@ relevant_users = [
     832, # Anka
     1554, # Anka alt unused
     1186, # Marlena
-    531, # Anita
+    # 531, # Anita
     # 600, # Jeff
     # 601, # Jeff (ncmir)
-    611, # Maryann
+    # 611, # Maryann
 ]
 
 for dataset_id, event_data in data.items():

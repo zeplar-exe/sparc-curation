@@ -10,7 +10,7 @@ import json
 from error_info_to_json import main as regenerate_errors
 import regex
 
-IN = ["./all-the-all-the-errors", "./cassava_errors", "./dropped_errors.txt", "./path_errors.txt"][2]
+IN = ["./all-the-all-the-errors", "./cassava_errors", "./dropped_errors.txt", "./path_errors.txt"][3]
 INFO_JSON = "./error-info.json"
 OUT_CSV = "./format-matches.csv"
 OUT_RE = "./format-regexes.txt"

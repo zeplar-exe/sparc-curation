@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 regex = importlib.import_module("regex")
 
-IN = ["./cassava_crawl_041525.json", "./missings.json"][1]
+IN = ["./cassava_crawl_070826.json", "./missings.json"][1]
 OUT_DATA = "./cassava_data.json"
 OUT_ERR = "./cassava_run_errors.txt"
 FOLDER = "/Volumes/Extreme SSD/sparc-cassava-raw/"
@@ -47,7 +47,7 @@ async def main():
             mat = file_regex.match(url)
             if mat:
                 d.add(url.replace("/", "+") + ".json")
-    if True:
+    if False:
         s = os.listdir(FOLDER)
         for url in tqdm(d):        
             if not url in s:

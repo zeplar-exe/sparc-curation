@@ -11,10 +11,10 @@ CURATORS = {
     832: "Anka",
     1554: "Anka (alt)",
     1186: "Marlena",
-    531: "Anita",
+    # 531: "Anita",
     # 600: "Jeff",
     # 601: "Jeff (ncmir)",
-    611: "Maryann",
+    # 611: "Maryann",
 }
 
 # RENAME_PACKAGE fixes to SDS format

@@ -103,7 +103,9 @@ class TemporalReporter(Reporter):
     @dataclass
     class DatasetReport:
         id: str
-        template_version: str = "<unknown>"
+        dataset_type_graph: dict[int, str] = field(default_factory=lambda: defaultdict(str))
+        template_version_graph: dict[int, str] = field(default_factory=lambda: defaultdict(str))
+        award_number_graph: dict[int, str] = field(default_factory=lambda: defaultdict(str))
         status_counts: Counter = field(default_factory=Counter)
         export_urls: list[dict] = field(default_factory=list)
         error_graph: dict[int, Counter] = field(default_factory=lambda: defaultdict(Counter))
@@ -115,17 +117,20 @@ class TemporalReporter(Reporter):
         is_sparc: bool = False
         is_rejoin: bool = False
         uses_soda: bool = False
-        
+        export_ts_to_updated_ts_graph: dict[int, dict] = field(default_factory=lambda: defaultdict(dict))
         def to_json_dict(self) -> dict:
             return {
                 "id": self.id,
                 "status_counts": dict(self.status_counts),
-                "template_version": self.template_version,
+                "dataset_type_graph": dict(sorted({str(ts): typ for ts, typ in self.dataset_type_graph.items()}.items())),
+                "template_version_graph": dict(sorted({str(ts): version for ts, version in self.template_version_graph.items()}.items())),
+                "award_number_graph": dict(sorted({str(ts): award_number for ts, award_number in self.award_number_graph.items()}.items())),
                 "export_urls": sorted(self.export_urls, key=lambda x: x["unix_timestamp"]),
                 "error_graph": dict(sorted({str(ts): dict(counter) for ts, counter in self.error_graph.items()}.items())),
                 "error_index_graph": dict(sorted({str(ts): index for ts, index in self.error_index_graph.items()}.items())),
                 "curation_index_graph": dict(sorted({str(ts): index for ts, index in self.curation_index_graph.items()}.items())),
                 "submission_index_graph": dict(sorted({str(ts): index for ts, index in self.submission_index_graph.items()}.items())),
+                "export_ts_to_updated_ts_graph": dict(sorted({str(ts): updated_ts for ts, updated_ts in self.export_ts_to_updated_ts_graph.items()}.items())),
                 "dropped_errors": self.dropped_errors,
                 "is_precision": self.is_precision,
                 "is_sparc": self.is_sparc,
@@ -171,15 +176,26 @@ class TemporalReporter(Reporter):
         inputs = result.get("inputs", {})
         status = inputs.get("remote_dataset_metadata", {}).get("publication", {}).get("status")
         report.status_counts[status] += 1
-        report.template_version = self._version(result) or "<unknown>"
         
         # format: 2023-05-10T20:49:41,892885Z
         timestamp = result["prov"]["timestamp_export_start"]
         unix_timestamp = parse_export_timestamp(timestamp)
+        report.template_version_graph[unix_timestamp] = self._version(result) or "<unknown>"
+        report.award_number_graph[unix_timestamp] = result.get("meta", {}).get("award_number") or "<unknown>"
         
+        ts_updated_contents = result["meta"]["timestamp_updated_contents"]
+        ts_updated = result["meta"]["timestamp_updated"]
+        uc_unix = parse_export_timestamp(ts_updated_contents) if ts_updated_contents else None
+        u_unix = parse_export_timestamp(ts_updated) if ts_updated else None
+        report.export_ts_to_updated_ts_graph[unix_timestamp] = {
+            "timestamp_updated_contents": uc_unix,
+            "timestamp_updated": u_unix
+        }
+
         report.error_index_graph[unix_timestamp] = file_data.get("status", {}).get("error_index", -1)
         report.curation_index_graph[unix_timestamp] = file_data.get("status", {}).get("curation_index", -1)
         report.submission_index_graph[unix_timestamp] = file_data.get("status", {}).get("submission_index", -1)
+        report.dataset_type_graph[unix_timestamp] = file_data.get("meta", {}).get("dataset_type", "<unknown>")
         
         dataset_uuid = id.split(":")[2]
         safe_timestamp = timestamp.replace(":", "")
@@ -237,6 +253,8 @@ class TemporalReporter(Reporter):
                         collect(nested.get("contents", {}).get("errors", []))
                 else:
                     collect(item.get("errors", []))
+        
+        report.error_graph[unix_timestamp] = Counter()
         
         for key, (path, err) in json_errors.items():
             if isinstance(err, list):
