@@ -15,9 +15,8 @@ from report_common import (
     EXCLUDED_DATASET_IDS,
     WHITELIST_DATASET_IDS,
     USE_ERROR_INDEX_GRAPH,
-    EXCLUDED_ERROR_DESCRIPTIONS,
-    EXCLUDED_ERROR_TYPES,
     is_excluded_dataset,
+    true_submission_date,
     parse_iso8601,
     parse_mmddyyyy,
     fiscal_year,
@@ -98,6 +97,13 @@ def first_request_date(dataset_id, event_sequences, floor=True):
     # use event timestamps (time-to-publication) pass floor=False to opt out.
     min_date = datetime.datetime(2022, 4, 1, tzinfo=datetime.timezone.utc)
 
+    # prefer the "true" submission date (curation_start_dates.csv); fall back to the
+    # earliest request_created.
+    true_date = true_submission_date(dataset_id)
+
+    if true_date is not None:
+        return None if (floor and true_date < min_date) else true_date
+
     events = event_sequences.get(dataset_id)
 
     if not events:
@@ -117,7 +123,11 @@ def plot_error_types_by_year(records, title, normalize=False):
         return
 
     df = pd.DataFrame(records)
-    df = df.groupby(["year", "type"]) ["count"].sum().reset_index()
+    # count = number of distinct datasets that have each error type per year
+    if "dataset_id" in df.columns:
+        df = df.groupby(["year", "type"])["dataset_id"].nunique().reset_index(name="count")
+    else:
+        df = df.groupby(["year", "type"])["count"].sum().reset_index()
     top_types = (
         df.groupby("type")["count"]
         .sum()
@@ -140,8 +150,8 @@ def plot_error_types_by_year(records, title, normalize=False):
         title=title,
         labels={
             "year": "Year",
-            "count": "Error Count",
-            "pct": "% of Error Types (within year)",
+            "count": "Number of Datasets",
+            "pct": "% of Datasets (within year)",
             "type": "Error Type",
         },
     )
@@ -355,7 +365,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 req_types = drop_excluded_error_types(error_types_near_effective(dataset_record, req_date))
                 if req_types:
                     for error_type, count in req_types.items():
-                        first_request_error_type_records.append({"year": fiscal_year(req_date), "type": error_type, "count": count})
+                        first_request_error_type_records.append({"year": fiscal_year(req_date), "type": error_type, "count": count, "dataset_id": dataset_id})
             
             pub_date = first_publication_date(dataset_id, event_sequences)
             
@@ -363,7 +373,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 pub_types = drop_excluded_error_types(error_types_near_effective(dataset_record, pub_date))
                 if pub_types:
                     for error_type, count in pub_types.items():
-                        publication_error_type_records.append({"year": fiscal_year(pub_date), "type": error_type, "count": count})
+                        publication_error_type_records.append({"year": fiscal_year(pub_date), "type": error_type, "count": count, "dataset_id": dataset_id})
         
         plot_error_types_by_year(first_request_error_type_records, "Top 10 Error Types at First Request by Year", normalize=True)
         plot_error_types_by_year(publication_error_type_records, "Top 10 Error Types at Publication by Year", normalize=True)
@@ -1132,7 +1142,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 )
                 if pub_types:
                     for error_type, count in pub_types.items():
-                        records.append({"year": fiscal_year(pub_date), "type": error_type, "count": count})
+                        records.append({"year": fiscal_year(pub_date), "type": error_type, "count": count, "dataset_id": dataset_id})
         plot_error_types_by_year(records, "Top 10 Error Types at Subsequent Publications by Year (% within year)", normalize=True)
 
     def metric_1d_subsequent_pub(temporal_report, event_sequences):

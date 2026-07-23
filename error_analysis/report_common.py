@@ -1,6 +1,7 @@
 import csv
 import datetime
 import json
+import re
 
 # Whether to use error_index_graph or error_graph for error-index lookups.
 USE_ERROR_INDEX_GRAPH = True
@@ -21,10 +22,133 @@ with open("./big-did.json") as f:
         if entry["id_organization"] == SPARC_ORGANIZATION:
             WHITELIST_DATASET_IDS.append(did)
 
-with open("./SPARC_Pipeline_Error_Dictionary_consolidated.csv") as f:
+with open("./SPARC_error_map.csv") as f:
     for row in csv.DictReader(f):
-        INCLUDED_ERROR_FORMATS.append(row["Match Key (verbatim)"])
+        INCLUDED_ERROR_FORMATS.append(row.get("Match Key (verbatim)", ""))
         ERROR_DICTIONARY.append(row)
+
+# error map (SPARC_error_map.csv) resolution: stored error_graph key -> canonical #
+# Rows collapse via `colaps to` (points at the canonical `#`). A stored key resolves
+# by its tag signature, or by matching the canonical row's Error Title, Type, Match
+# Key, or Legacy Title.
+_error_map_rows = {row["#"].strip(): row for row in ERROR_DICTIONARY if row.get("#", "").strip()}
+
+TAG_KINDS = ("regex", "required", "expected_type", "allowed")
+
+
+def _canonical_num(row):
+    seen = set()
+
+    while True:
+        num = row.get("#", "").strip()
+        collapse = (row.get("colaps to") or "").strip()
+
+        if not collapse or collapse not in _error_map_rows or collapse in seen:
+            return num
+
+        seen.add(num)
+        row = _error_map_rows[collapse]
+
+
+def _tag_signature(error_type):
+    """Normalized (kind, content) tag, so `required(#/meta:'organ')` and
+    `required('organ')` both become ('required', 'organ'). None if no tag."""
+    best = None
+
+    for kind in TAG_KINDS:
+        idx = error_type.find(kind + "(")
+        if idx != -1 and (best is None or idx < best[1]):
+            best = (kind, idx)
+
+    if best is None:
+        return None
+
+    kind, idx = best
+    content = error_type[idx + len(kind) + 1:].rstrip()
+
+    if content.endswith(")"):
+        content = content[:-1]
+
+    content = content.strip().rstrip('"').strip()
+
+    if kind == "required":
+        match = re.search(r"'([^']+)'", content)  # field name only (drop #/path)
+        content = match.group(1) if match else content
+
+    return (kind, content)
+
+
+TITLE_TO_ID = {}
+TITLE_TO_CANON = {}
+TAG_TO_ID = {}
+TAG_TO_CANON = {}
+EXCLUDED_IDS = set()
+
+for row in ERROR_DICTIONARY:
+    num = _canonical_num(row)
+    canon_title = _error_map_rows.get(num, row).get("Error Title", "").strip()
+
+    keys = []
+    for column in ("Error Title", "Type (human-readable)"):
+        value = (row.get(column) or "").strip()
+        if value:
+            keys.append(value)
+
+    # A Match Key is a single pattern whose regex()/allowed() body can itself
+    # contain '|', so it must NOT be split. Legacy Title may list several titles.
+    match_key = (row.get("Match Key (verbatim)") or "").strip()
+    if match_key:
+        keys.append(match_key)
+
+    for part in (row.get("Legacy Title") or "").split("|"):
+        part = part.strip()
+        if part:
+            keys.append(part)
+
+    for key in keys:
+        TITLE_TO_ID.setdefault(key, num)
+        TITLE_TO_CANON.setdefault(key, canon_title)
+
+    # field/type/regex-specific rows: index by normalized tag signature
+    signature = _tag_signature(match_key) if match_key else None
+    if signature:
+        TAG_TO_ID.setdefault(signature, num)
+        TAG_TO_CANON.setdefault(signature, canon_title)
+
+# exclusion is driven by the canonical row's own Excluded? flag
+for num, row in _error_map_rows.items():
+    if _canonical_num(row) == num and (row.get("Excluded?") or "").strip().lower() == "yes":
+        EXCLUDED_IDS.add(num)
+
+
+def _title_of(error_type):
+    """Recover the stored title: drop the `path:` prefix and any tag suffix."""
+    after = error_type.split(":", 1)[1] if ":" in error_type else error_type
+    after = re.split(r" (regex|required|expected_type|allowed)\(", after)[0]
+    return after.strip()
+
+
+def get_error_id(error_type):
+    """Canonical error-map `#` for a stored error_graph key ('' if unresolved).
+    Tag-aware: a tag signature resolves to the field/type-specific row first,
+    otherwise falls back to the base title."""
+    signature = _tag_signature(error_type)
+
+    if signature is not None and signature in TAG_TO_ID:
+        return TAG_TO_ID[signature]
+
+    return TITLE_TO_ID.get(_title_of(error_type), "")
+
+
+def get_canonical_title(error_type):
+    """Canonical error-map Error Title for a stored key (falls back to raw title)."""
+    signature = _tag_signature(error_type)
+
+    if signature is not None and signature in TAG_TO_CANON:
+        return TAG_TO_CANON[signature]
+
+    title = _title_of(error_type)
+    return TITLE_TO_CANON.get(title, title)
 
 
 def is_excluded_dataset(dataset_id):
@@ -52,48 +176,37 @@ def fiscal_year(dt):
     return None if dt is None else dt.year if dt.month >= 2 else dt.year - 1
 
 
+_true_submission_dates = None
+
+
+def true_submission_date(dataset_id):
+    """Precomputed 'true' submission date (from curation_start_dates.csv) for a
+    dataset's first publication cycle, or None if absent."""
+    global _true_submission_dates
+
+    if _true_submission_dates is None:
+        _true_submission_dates = {}
+        try:
+            with open("./curation_start_dates.csv") as f:
+                for row in csv.DictReader(f):
+                    value = (row.get("true_submission_date") or "").strip()
+                    if value:
+                        _true_submission_dates[row["dataset_id"]] = value
+        except FileNotFoundError:
+            pass
+
+    return parse_iso8601(_true_submission_dates.get(dataset_id))
+
+
 with open("./error-info.json") as _ef:
     _error_info = {entry["id"]: (entry["description"], entry["format"]) for entry in json.load(_ef)}
-EXCLUDED_ERROR_DESCRIPTIONS = [
-    # _error_info[i] for i in (9, 132, 16, 89, 90, 23, 24, 25, 26, 39, 40, 41, 67, 106, 131, 129)
-]  # see error-info.json
-EXCLUDED_ERROR_TYPES = [
-    "JSON value does not match Regex regex(^(OT2OD|OT3OD|U18|TR|U01))",
-    "Required JSON property is missing from JSON required('contributor_count')",
-    "Required JSON property is missing from JSON required('description')",
-    "Required JSON property is missing from JSON required('manifest_records')",
-    "Required JSON property is missing from JSON required('path_metadata')",
-    "Required JSON property is missing from JSON required('submission_file')",
-    "Required JSON property is missing from JSON required('tsr",
-    "Required JSON property is missing from JSON required('modality')",
-    "Required JSON property is missing from JSON required('organ')",
-    "Required JSON property is missing from JSON required('techniques')",
-    "JSON value value is of incorrect type expected_type(array)",
-]
-INCLUDED_ERROR_DESCRIPTIONS = [
-    info[0] for info in _error_info.values() if info[1] in INCLUDED_ERROR_FORMATS or any(info[1].startswith(fmt) for fmt in INCLUDED_ERROR_FORMATS) or any(fmt.startswith(info[1]) for fmt in INCLUDED_ERROR_FORMATS)
-]
-INCLUDED_ERROR_FORMATS = [
-    info[1] for info in _error_info.values() if info[1] in INCLUDED_ERROR_FORMATS or any(info[1].startswith(fmt) for fmt in INCLUDED_ERROR_FORMATS) or any(fmt.startswith(info[1]) for fmt in INCLUDED_ERROR_FORMATS)
-]
+
 
 def is_excluded_error_type(error_type):
-    return False # now that we're using the dictionary, this should always be false
-    path = error_type.split(":", 1)[0]
-    err = error_type.split(":", 1)[-1] # if no path, get first item
-    a = any(
-        err == desc or err.startswith(desc + " ")
-        for desc, format in EXCLUDED_ERROR_DESCRIPTIONS
-    ) or any(error_type == et for et in EXCLUDED_ERROR_TYPES) \
-        or "inputs/" in path
-    
-    if a:
-        return True
-    
-    if not err in INCLUDED_ERROR_DESCRIPTIONS and not any(err.startswith(desc) for desc in INCLUDED_ERROR_DESCRIPTIONS):
-        return True
-
-    return False
+    # Exclusion is driven entirely by the error map's Excluded? column: resolve the
+    # stored key to its canonical map #, then check that # against EXCLUDED_IDS.
+    # Unresolved keys (id == "") are never excluded.
+    return get_error_id(error_type) in EXCLUDED_IDS
 
 
 def get_error_type_format(error_type):
@@ -230,25 +343,28 @@ def error_types_near(target_ts, error_graph):
 
 
 def effective_after_event(dataset_record, event_dt):
-    """True if the dataset has NO curation export whose 'updated' timestamp is at
-    or before event_dt -- i.e. the nearest export postdates the event, so its
-    error snapshot cannot represent the dataset's state at that event. Uses the
-    export_ts_to_updated_ts_graph 'timestamp_updated' value per export (falling
-    back to the export-start timestamp when absent). Datasets with no exports,
-    or a None event, are treated as "after" (excluded)."""
+    """True if no curation export has an 'updated' timestamp at or before event_dt
+    -- the nearest export postdates the event, so its snapshot can't represent the
+    state then. No exports or a None event count as "after"."""
     if event_dt is None:
         return True
+
     event_ts = int(event_dt.timestamp())
     export_urls = dataset_record.get("export_urls") or []
+
     if not export_urls:
         return True
+
     updated_graph = dataset_record.get("export_ts_to_updated_ts_graph") or {}
+
     for export in export_urls:
         start = export["unix_timestamp"]
         updated = (updated_graph.get(str(start)) or {}).get("timestamp_updated")
         effective = updated if updated is not None else start
+
         if effective <= event_ts:
             return False
+
     return True
 
 

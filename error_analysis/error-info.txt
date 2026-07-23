@@ -400,3 +400,15 @@ error UNK
 error UNK
     Python Errno 24
     f'[Errno 24] No file descriptors available: {file}'
+error UNK
+    Unclassifiable 'o' error
+    f'\'o\''
+error UNK
+    Unclassifiable '1' error
+    f'\'1\''
+error UNK
+    Unclassifiable 'slashes N' error
+    f'slashes {n}'
+error UNK
+    Unknown namespace prefix
+    f'extract failed with {prefix} namespace prefix'

@@ -3,7 +3,7 @@ import datetime
 import json
 from datetime import timezone
 from collections import Counter, defaultdict
-from report_common import is_excluded_dataset, parse_iso8601, is_excluded_error_type, get_error_type_format, get_error_format_dict_data
+from report_common import is_excluded_dataset, parse_iso8601, is_excluded_error_type, get_error_type_format, get_error_format_dict_data, get_error_id, true_submission_date
 
 EVENT_SEQUENCES = "./pennsieve_event_series.json"
 TEMPORAL_REPORT = "./temporal_report.json"
@@ -97,6 +97,8 @@ def main():
     rows = []
     message_totals = Counter()
     datasets_by_message = defaultdict(set)  # message -> set of dataset ids
+    message_to_path = {}  # message -> error path (#/...)
+    message_to_id = {}    # message -> canonical error-map # (via collapse)
 
     for dataset_id, cycles in event_sequences.items():
         if is_excluded_dataset(dataset_id):
@@ -147,11 +149,17 @@ def main():
         doi = dois[-1] if dois else "<no doi>"
 
         for cycle in eligible[:1]: # first cycle only
-            req_raw = cycle.get("request_created")
             acc_raw = cycle.get("accept_created")
-            req = parse_iso8601(req_raw)
             acc = parse_iso8601(acc_raw)
-            
+
+            true_sub = true_submission_date(dataset_id)
+            if true_sub is not None:
+                req = true_sub
+                req_raw = true_sub.isoformat()
+            else:
+                req_raw = cycle.get("request_created")
+                req = parse_iso8601(req_raw)
+
             if not req or not acc:
                 continue
 
@@ -191,6 +199,8 @@ def main():
                         full = message # f"{path}:{fmt}"
                         message_totals[full] += 1
                         datasets_by_message[full].add(dataset_id)
+                        message_to_path[full] = path
+                        message_to_id[full] = get_error_id(message)
 
                 eff = datetime.datetime.fromtimestamp(eff_ts, datetime.timezone.utc)
                 fixed = {
@@ -223,8 +233,16 @@ def main():
     with open(OUT, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(FIXED_FIELDS + message_columns)
+        
         summary_row = ["how_many_datasets_have_this_error"] + [""] * (len(FIXED_FIELDS) - 1)
         writer.writerow(summary_row + [len(datasets_by_message[msg]) for msg in message_columns])
+
+        path_row = ["error_path"] + [""] * (len(FIXED_FIELDS) - 1)
+        writer.writerow(path_row + [message_to_path.get(msg, "") for msg in message_columns])
+        
+        id_row = ["error_id"] + [""] * (len(FIXED_FIELDS) - 1)
+        writer.writerow(id_row + [message_to_id.get(msg, "") for msg in message_columns])
+        
         for fixed, snapshot in rows:
             err_row = [1 if msg in snapshot else 0 for msg in message_columns]
             writer.writerow(

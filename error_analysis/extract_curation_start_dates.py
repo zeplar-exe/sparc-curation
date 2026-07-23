@@ -1,4 +1,5 @@
 import csv
+import datetime
 import json
 
 from report_common import is_excluded_dataset, parse_iso8601
@@ -7,6 +8,10 @@ EVENT_SEQUENCES = "./pennsieve_event_series.json"
 STATUS_DELIMITED = "./pennsieve_status_delimited.json"
 RAW_EVENTS = "./pennsieve-event-data-2026-05-12T020310Z.json"
 OUT = "./curation_start_dates.csv"
+
+READY_STATUS_TARGETS = ("03_READY_FOR_CURATION_INVESTIGATOR", "04_CURATION_IN_PROGRESS_CURATORS")
+MIN_LENGTH_DAYS = 2
+MANUAL_REVIEW_DAYS = 7
 
 CURATOR_IDS = {
     # 589,
@@ -77,18 +82,18 @@ def main():
             def in_window(dt):
                 return (previous_accept is None or dt > previous_accept) and dt < accept
 
-            # 1. first UPDATE_STATUS transitioning into 04_CURATION_IN_PROGRESS_CURATORS
+            # 1. first UPDATE_STATUS
             update_status = ""
             for dt, event_type, event_str, raw in dataset_events:
                 if (
                     event_type == "UPDATE_STATUS"
-                    and event_str.endswith("-> 04_CURATION_IN_PROGRESS_CURATORS")
+                    and any(event_str.endswith("-> " + t) for t in READY_STATUS_TARGETS)
                     and in_window(dt)
                 ):
                     update_status = raw
                     break
 
-            # 2. first curator action of any kind in the window (raw event stream)
+            # 2. first curator action (raw event stream)
             curator_touch = ""
             for dt, raw in dataset_touches:
                 if in_window(dt):
@@ -99,25 +104,37 @@ def main():
             request = parse_iso8601(request_raw)
             request_publication = request_raw if (request is not None and in_window(request)) else ""
 
+            # "true" submission date:
+            #  - earliest of (ready-for-curation status change, request pub/embargo)
+            #  - if request->publication is under MIN_LENGTH_DAYS, use curator first touch
+            #  - if the result is still under MANUAL_REVIEW_DAYS before publication -> flag
+            status_dt = parse_iso8601(update_status) if update_status else None
+            request_dt = request if (request is not None and in_window(request)) else None
+            touch_dt = parse_iso8601(curator_touch) if curator_touch else None
+
+            primary_candidates = [d for d in (status_dt, request_dt) if d]
+            primary = min(primary_candidates) if primary_candidates else None
+
+            too_fast = request_dt is not None and (accept - request_dt) < datetime.timedelta(days=MIN_LENGTH_DAYS)
+            true_dt = (touch_dt or primary) if too_fast else (primary or touch_dt)
+
+            needs_review = true_dt is not None and (accept - true_dt) < datetime.timedelta(days=MANUAL_REVIEW_DAYS)
+            true_submission = true_dt.isoformat() if true_dt else ""
+
             rows.append({
                 "dataset_id": dataset_id,
                 "publication_date": accept_raw,
                 "curation_start_update_status": update_status,
                 "curation_start_request_publication": request_publication,
                 "curation_start_curator_first_touch": curator_touch,
+                "true_submission_date": true_submission,
+                "needs_manual_review": "yes" if needs_review else "",
             })
 
     rows.sort(key=lambda r: (r["dataset_id"], r["publication_date"]))
 
-    fieldnames = [
-        "dataset_id",
-        "publication_date",
-        "curation_start_update_status",
-        "curation_start_request_publication",
-        "curation_start_curator_first_touch",
-    ]
     with open(OUT, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
         writer.writeheader()
         writer.writerows(rows)
 
