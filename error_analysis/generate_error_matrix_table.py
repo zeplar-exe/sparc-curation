@@ -30,7 +30,6 @@ FIXED_FIELDS = [
     "dataset_type",
     "event_timestamp",
     "doi",
-    "export_timestamp",
     "failed_completely at submission",
     "included_errors_present",
     "excluded_errors_present",
@@ -40,7 +39,8 @@ FIXED_FIELDS = [
     "effective_export_timestamp",
     "days_export_to_event",
     "days_export_to_effective",
-    "timestamp_mode"
+    "timestamp_mode",
+    "title"
 ]
 
 
@@ -136,16 +136,17 @@ def main():
         exports = sorted(exports, key=lambda e: effective_export_ts(e, updated_graph))
         export_ts = [effective_export_ts(e, updated_graph) for e in exports]
 
-        error_graph = record.get("error_graph") or {}
-        curation_index_graph = record.get("curation_index_graph") or {}
-        error_index_graph = record.get("error_index_graph") or {}
-        submission_index_graph = record.get("submission_index_graph") or {}
-        template_version_graph = record.get("template_version_graph") or {}
-        award_number_graph = record.get("award_number_graph") or {}
-        dataset_type_graph = record.get("dataset_type_graph") or {}
+        title = record.get("title", "<unknown>")
+        error_graph = record.get("error_graph", {})
+        curation_index_graph = record.get("curation_index_graph", {})
+        error_index_graph = record.get("error_index_graph", {})
+        submission_index_graph = record.get("submission_index_graph", {})
+        template_version_graph = record.get("template_version_graph", {})
+        award_number_graph = record.get("award_number_graph", {})
+        dataset_type_graph = record.get("dataset_type_graph", {})
         template_version_single = record.get("template_version")
 
-        dois = (big_did.get(dataset_id) or {}).get("dois") or []
+        dois = big_did.get(dataset_id, {}).get("dois", [])
         doi = dois[-1] if dois else "<no doi>"
 
         for cycle in eligible[:1]: # first cycle only
@@ -166,15 +167,13 @@ def main():
             for phase, event_dt, event_raw in (
                 ("submission", req, req_raw),
                 ("publication", acc, acc_raw),
-            ):
-                # failed + export selection are derived from the chosen export below
-                        
+            ):        
                 event_ts = int(event_dt.timestamp())
                 pos: int = nearest_index(event_ts, export_ts)
                 
                 export = exports[pos]
                 export_unix = export["unix_timestamp"]
-                eff_ts = export_ts[pos] # switchable ts for alignment
+                eff_ts = export_ts[pos]
                 key = str(export_unix)
 
                 failed = error_index_graph.get(key) == 9999
@@ -203,6 +202,7 @@ def main():
                         message_to_id[full] = get_error_id(message)
 
                 eff = datetime.datetime.fromtimestamp(eff_ts, datetime.timezone.utc)
+                print(eff.isoformat().replace('+00:00', 'Z'))
                 fixed = {
                     "dataset_id": dataset_id.replace("N:", ""),
                     "award_number": award_number,
@@ -214,14 +214,14 @@ def main():
                     "dataset_type": dataset_type,
                     "event_timestamp": event_raw or "",
                     "doi": doi,
-                    "export_timestamp": "",
+                    "title": title,
                     "failed_completely at submission": failed,
                     "included_errors_present": included,
                     "excluded_errors_present": excluded,
                     "error_type_index": len(snapshot),
                     "curation_export_download_link": export.get("url", ""),
                     "curation_export_export_date": export.get("timestamp", ""),
-                    "effective_export_timestamp": eff.isoformat(),
+                    "effective_export_timestamp": eff.isoformat().replace('+00:00', 'Z'),
                     "days_export_to_event": round((export_unix - event_dt.timestamp()) / 86400, 4),
                     "days_export_to_effective": round((eff.timestamp() - event_dt.timestamp()) / 86400, 4),
                     "timestamp_mode": TIMESTAMP_MODE

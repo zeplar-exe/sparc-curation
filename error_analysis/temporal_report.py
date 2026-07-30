@@ -103,6 +103,7 @@ class TemporalReporter(Reporter):
     @dataclass
     class DatasetReport:
         id: str
+        title: str = "<unknown>"
         dataset_type_graph: dict[int, str] = field(default_factory=lambda: defaultdict(str))
         template_version_graph: dict[int, str] = field(default_factory=lambda: defaultdict(str))
         award_number_graph: dict[int, str] = field(default_factory=lambda: defaultdict(str))
@@ -121,6 +122,7 @@ class TemporalReporter(Reporter):
         def to_json_dict(self) -> dict:
             return {
                 "id": self.id,
+                "title": self.title,
                 "status_counts": dict(self.status_counts),
                 "dataset_type_graph": dict(sorted({str(ts): typ for ts, typ in self.dataset_type_graph.items()}.items())),
                 "template_version_graph": dict(sorted({str(ts): version for ts, version in self.template_version_graph.items()}.items())),
@@ -172,6 +174,8 @@ class TemporalReporter(Reporter):
         if not report:
             report = TemporalReporter.DatasetReport(id=id)
             self.reports[id] = report
+        
+        report.title = result.get("meta", {}).get("title", report.title)
 
         inputs = result.get("inputs", {})
         status = inputs.get("remote_dataset_metadata", {}).get("publication", {}).get("status")
@@ -195,8 +199,11 @@ class TemporalReporter(Reporter):
         report.error_index_graph[unix_timestamp] = file_data.get("status", {}).get("error_index", -1)
         report.curation_index_graph[unix_timestamp] = file_data.get("status", {}).get("curation_index", -1)
         report.submission_index_graph[unix_timestamp] = file_data.get("status", {}).get("submission_index", -1)
-        report.dataset_type_graph[unix_timestamp] = file_data.get("meta", {}).get("dataset_type", "<unknown>")
         
+        dataset_type = file_data.get("meta", {}).get("dataset_type", "<unknown>")
+        dataset_type = dataset_type or file_data.get("inputs", {}).get("dataset_description_file", {}).get("dataset_type", "<unknown>")
+        report.dataset_type_graph[unix_timestamp] = dataset_type
+
         dataset_uuid = id.split(":")[2]
         safe_timestamp = timestamp.replace(":", "")
         url = f"https://cassava.ucsd.edu/sparc/datasets/{dataset_uuid}/{safe_timestamp}.tar.xz"
@@ -465,3 +472,14 @@ if __name__ == "__main__":
         # PrincipalInvestigatorReporter("principal_investigator_frequency.json"),
     ]
     asyncio.run(main(reporters))
+
+
+# A7 spreadsheet as ground truth to find sub-pub cycles that come before the "first cycle" we see in cassava/pennsieve
+    # need to integrate fixed publication dates from A7 as well
+# use dataset_type from SPARC_pipeline_published_reconciliation
+    # also DOI v1
+# use publication year from SPARC_pipeline_published_reconciliation as well for first cycle check
+    # also, from this file, dataset_type=computational + scaffold=yes is to exclude for sure
+# ensure whether cases where EITHER req or pub date is before april 2022, the dataset is excluded entirely (even if pub only)
+# why do the two error at submission graphs disagree? (yearly/monthly/quarterly vs yearly)
+

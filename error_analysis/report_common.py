@@ -1,7 +1,11 @@
 import csv
 import datetime
+import glob
 import json
+import os
 import re
+
+from dateutil import parser as dateutil_parser
 
 # Whether to use error_index_graph or error_graph for error-index lookups.
 USE_ERROR_INDEX_GRAPH = True
@@ -169,6 +173,30 @@ def parse_mmddyyyy(date_str):
     return datetime.datetime.strptime(date_str, "%m-%d-%Y")
 
 
+def parse_date(value):
+    """Generalized/lenient date parse for hand-verified values: accepts datetime
+    objects, ISO8601 strings, and free-form strings ('around 1/15/2019',
+    '12/21/2020'). Naive results are treated as UTC. None when nothing parses."""
+    if value is None:
+        return None
+
+    if isinstance(value, datetime.datetime):
+        dt = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            dt = dateutil_parser.parse(text, fuzzy=True)
+        except (ValueError, OverflowError):
+            return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+
+    return dt
+
+
 def fiscal_year(dt):
     """Fiscal year with a Feb 1 boundary: Jan belongs to the prior year.
     FY2022 = Feb 2022 - Jan 2023.
@@ -179,15 +207,26 @@ def fiscal_year(dt):
 _true_submission_dates = None
 
 
+def _curation_start_source():
+    """Prefer the newest hand-verified export (curation_start_dates_verified*.csv),
+    else the computed curation_start_dates.csv."""
+    verified = glob.glob("./curation_start_dates_verified*.csv")
+    if verified:
+        return max(verified, key=os.path.getmtime)
+    return "./curation_start_dates.csv"
+
+
 def true_submission_date(dataset_id):
-    """Precomputed 'true' submission date (from curation_start_dates.csv) for a
-    dataset's first publication cycle, or None if absent."""
+    """'True' submission date for a dataset's first publication cycle, from the
+    verified export (falling back to the computed csv). Parsed leniently, so
+    hand-entered values in mixed formats still resolve. None if absent."""
     global _true_submission_dates
 
     if _true_submission_dates is None:
         _true_submission_dates = {}
         try:
-            with open("./curation_start_dates.csv") as f:
+            # utf-8-sig strips the BOM Excel prepends on CSV export
+            with open(_curation_start_source(), encoding="utf-8-sig") as f:
                 for row in csv.DictReader(f):
                     value = (row.get("true_submission_date") or "").strip()
                     if value:
@@ -195,7 +234,7 @@ def true_submission_date(dataset_id):
         except FileNotFoundError:
             pass
 
-    return parse_iso8601(_true_submission_dates.get(dataset_id))
+    return parse_date(_true_submission_dates.get(dataset_id))
 
 
 with open("./error-info.json") as _ef:

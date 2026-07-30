@@ -103,7 +103,7 @@ def match_error(error: str, include_source: bool = False, do_log: bool = False) 
     _load_formats(INFO_JSON, include_source=include_source, do_log=do_log)
 
     for fmt in formats:
-        search = fmt.regex.search(error, timeout=100)
+        search = fmt.regex.search(error, timeout=60)
         if search:
             return fmt, search
     

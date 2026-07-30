@@ -1,5 +1,3 @@
-# This file was created in large part with GitHub Copilot
-
 import csv
 import datetime
 import json
@@ -10,6 +8,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.io as pio
 
 from report_common import (
     EXCLUDED_DATASET_IDS,
@@ -28,8 +27,19 @@ from report_common import (
     last_error_types_at_or_before,
     error_types_near,
     error_types_near_effective,
+    nearest_export_key_effective,
     effective_after_event,
 )
+
+# file-wide plotly styling: bigger fonts on every figure
+pio.templates["report"] = go.layout.Template(
+    layout=dict(
+        font=dict(size=18),
+        title=dict(font=dict(size=24)),
+        legend=dict(font=dict(size=16)),
+    )
+)
+pio.templates.default = "plotly+report"
 
 
 TEMPORAL_REPORT = "./temporal_report.json"
@@ -116,6 +126,51 @@ def first_request_date(dataset_id, event_sequences, floor=True):
         return None
 
     return min(request_dates)
+
+
+def dataset_type_near(dataset_record, event_dt):
+    if event_dt is None:
+        return ""
+
+    key = nearest_export_key_effective(dataset_record, int(event_dt.timestamp()))
+    return (dataset_record.get("dataset_type_graph") or {}).get(key, "")
+
+
+def template_version_near(dataset_record, event_dt):
+    if event_dt is None:
+        return ""
+
+    key = nearest_export_key_effective(dataset_record, int(event_dt.timestamp()))
+    graph_value = (dataset_record.get("template_version_graph") or {}).get(key)
+    return graph_value or dataset_record.get("template_version") or ""
+
+
+def award_number_near(dataset_record, event_dt):
+    if event_dt is None:
+        return ""
+
+    key = nearest_export_key_effective(dataset_record, int(event_dt.timestamp()))
+    return (dataset_record.get("award_number_graph") or {}).get(key, "")
+
+
+def distinct_errors_at(dataset_record, event_dt):
+    types = drop_excluded_error_types(error_types_near_effective(dataset_record, event_dt))
+    return len(types) if types else 0
+
+
+def graph_excluded(dataset_id, dataset_record, event_sequences):
+    """Dataset-level exclusion for the error graphs, on top of is_excluded_dataset:
+    drop when the true submission is missing / before the 2022-04 window, or the
+    dataset_type at submission is computational."""
+    submission = first_request_date(dataset_id, event_sequences)
+
+    if submission is None:
+        return True
+
+    if dataset_type_near(dataset_record, submission) == "computational":
+        return True
+
+    return False
 
 
 def plot_error_types_by_year(records, title, normalize=False):
@@ -304,7 +359,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 y_absmax = max(abs(min(y_vals)), abs(max(y_vals)))
                 y_buffer = max(1, y_absmax * 0.05)
                 hover_text = [
-                    f"Dataset ID: {r['dataset_id']}<br>Request Date: {format_datetime(r['request_time'])}<br>Publication Date: {format_datetime(r['publish_time'])}<br>Diff: {r['error_diff']}<br>At Request: {r.get('req_error_count', 'N/A')}<br>At Publish: {r.get('pub_error_count', 'N/A')}"
+                    f"Dataset ID: {r['dataset_id']}<br>Submission Date: {format_datetime(r['request_time'])}<br>Publication Date: {format_datetime(r['publish_time'])}<br>Diff: {r['error_diff']}<br>At Submission: {r.get('req_error_count', 'N/A')}<br>At Publish: {r.get('pub_error_count', 'N/A')}"
                     for r in filtered
                 ]
 
@@ -335,9 +390,9 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                         fig.add_annotation(x=update_date, y=1, yref="paper", text=update["version"], showarrow=False)
 
                 fig.add_hline(y=0, line=dict(color="gray", dash="dash"), opacity=0.5)
-                fig.update_yaxes(range=[-y_absmax - y_buffer, y_absmax + y_buffer], title=f"{source_label} Difference (Publication - Request)")
-                fig.update_xaxes(title="First Request Date")
-                fig.update_layout(title=f"Standards Adherence: {source_label} Difference (Publication - Request)<br>{soda_label} {org}")
+                fig.update_yaxes(range=[-y_absmax - y_buffer, y_absmax + y_buffer], title=f"{source_label} Difference (Publication - Submission)")
+                fig.update_xaxes(title="Submission Date")
+                fig.update_layout(title=f"Standards Adherence: {source_label} Difference (Publication - Submission)<br>{soda_label} {org}")
                 fig.show()
 
     def metric_1b_error_types(temporal_report, event_sequences):
@@ -357,7 +412,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
 
             # exclude datasets whose nearest curation export (by updated ts)
             # postdates the request or publication event
-            if (req_date and effective_after_event(dataset_record, req_date)) or \
+            if graph_excluded(dataset_id, dataset_record, event_sequences) or \
+               (req_date and effective_after_event(dataset_record, req_date)) or \
                (pub_date and effective_after_event(dataset_record, pub_date)):
                 continue
 
@@ -375,7 +431,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                     for error_type, count in pub_types.items():
                         publication_error_type_records.append({"year": fiscal_year(pub_date), "type": error_type, "count": count, "dataset_id": dataset_id})
         
-        plot_error_types_by_year(first_request_error_type_records, "Top 10 Error Types at First Request by Year", normalize=True)
+        plot_error_types_by_year(first_request_error_type_records, "Top 10 Error Types at Submission by Year", normalize=True)
         plot_error_types_by_year(publication_error_type_records, "Top 10 Error Types at Publication by Year", normalize=True)
 
     def metric_1c_removed_errors(temporal_report, event_sequences):
@@ -390,8 +446,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             if not req_date or not pub_date:
                 continue
 
-            # exclude when the nearest export (by updated ts) postdates either event
-            if effective_after_event(dataset_record, req_date) or effective_after_event(dataset_record, pub_date):
+            if graph_excluded(dataset_id, dataset_record, event_sequences) or effective_after_event(dataset_record, req_date) or effective_after_event(dataset_record, pub_date):
                 continue
 
             req_types = drop_excluded_error_types(error_types_near_effective(dataset_record, req_date))
@@ -410,7 +465,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 if removed_count > 0:
                     removed_error_type_records.append({"year": fiscal_year(req_date), "type": error_type, "count": removed_count})
         
-        plot_removed_errors_by_year(removed_error_type_records, "Removed Errors by Type by First Request Year")
+        plot_removed_errors_by_year(removed_error_type_records, "Removed Errors by Type by Submission Year")
 
     def metric_1d_error_type_counts(temporal_report, event_sequences):
         req_records = []
@@ -428,8 +483,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             req_date = first_request_date(dataset_id, event_sequences)
             pub_date = first_publication_date(dataset_id, event_sequences)
 
-            # exclude when the nearest export (by updated ts) postdates either event
-            if (req_date and effective_after_event(dataset_record, req_date)) or \
+            if graph_excluded(dataset_id, dataset_record, event_sequences) or \
+               (req_date and effective_after_event(dataset_record, req_date)) or \
                (pub_date and effective_after_event(dataset_record, pub_date)):
                 continue
 
@@ -448,7 +503,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                     "error_type_count": len(pub_types) if pub_types else 0,
                 })
 
-        for label, records in [("At First Request", req_records), ("At Publication", pub_records)]:
+        for label, records in [("At Submission", req_records), ("At Publication", pub_records)]:
             if not records:
                 continue
             df = pd.DataFrame(records)
@@ -501,7 +556,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             overall,
             x="quarters_bucket",
             y="count",
-            title="Number of Quarters from First Request to Publication (All Datasets)",
+            title="Number of Quarters from Submission to Publication (All Datasets)",
             labels={
                 "quarters_bucket": "Quarters to Publication",
                 "count": "Number of Datasets",
@@ -519,11 +574,11 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             y="count",
             color="request_year",
             barmode="group",
-            title="Number of Quarters from First Request to Publication by Request Year",
+            title="Number of Quarters from Submission to Publication by Submission Year",
             labels={
                 "quarters_bucket": "Quarters to Publication",
                 "count": "Number of Datasets",
-                "request_year": "Request Year",
+                "request_year": "Submission Year",
             },
         )
         fig2.update_xaxes(dtick=1)
@@ -560,8 +615,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             fig = px.box(df, x="year", y="duration", 
                          hover_data=["id", "publication_date"], 
                          points="all", 
-                         title="Time from First Request to Publication by Year", 
-                         labels={"id": "Dataset ID", "duration": "Days from Request to Publication", "year": "Request Year", "publication_date": "Publication Date"})
+                         title="Time from Submission to Publication by Year", 
+                         labels={"id": "Dataset ID", "duration": "Days from Submission to Publication", "year": "Submission Year", "publication_date": "Publication Date"})
             
             if unpublished_counts_by_year:
                 unpublished_by_year_text = ", ".join([f"{year}: {count}" for year, count in sorted(unpublished_counts_by_year.items())])
@@ -571,7 +626,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 for tick_value, tick_label in zip(year_tick_values, year_tick_text):
                     fig.add_hline(y=tick_value, line=dict(color="gray", dash="dot"), opacity=0.6)
                     fig.add_annotation(x=1.01, xref="paper", y=tick_value, yref="y", text=tick_label, showarrow=False, xanchor="left", yanchor="middle", font=dict(color="gray", size=11))
-                fig.update_yaxes(title="Days from Request to Publication")
+                fig.update_yaxes(title="Days from Submission to Publication")
             
             fig.show()
 
@@ -619,8 +674,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             total_curation_events = sum(len(sequence) for sequence in dataset_sequences)
             curation_event_records.append({"dataset_id": dataset_id, "first_request_year": fiscal_year(first_request), "publication_date": publication_date, "total_curation_events": total_curation_events})
         if curation_event_records:
-            fig = px.box(pd.DataFrame(curation_event_records), x="first_request_year", y="total_curation_events", hover_data=["dataset_id", "publication_date"], points="all", title="Total Curation Changes per Dataset by First Request Year", labels={"first_request_year": "First Request Year", "total_curation_events": "Total Curation Changes", "dataset_id": "Dataset ID", "publication_date": "Publication Date"})
-            fig.update_traces(hovertemplate="First Request Year=%{x}<br>Total Curation Sessions=%{y}<br>Dataset ID=%{customdata[0]}<br>Publication Date=%{customdata[1]}<extra></extra>")
+            fig = px.box(pd.DataFrame(curation_event_records), x="first_request_year", y="total_curation_events", hover_data=["dataset_id", "publication_date"], points="all", title="Total Curation Changes per Dataset by Submission Year", labels={"first_request_year": "Submission Year", "total_curation_events": "Total Curation Changes", "dataset_id": "Dataset ID", "publication_date": "Publication Date"})
+            fig.update_traces(hovertemplate="Submission Year=%{x}<br>Total Curation Sessions=%{y}<br>Dataset ID=%{customdata[0]}<br>Publication Date=%{customdata[1]}<extra></extra>")
             fig.show()
 
     def metric_4b_session_timespans(curation_clusters, event_sequences):
@@ -653,7 +708,6 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             removed_count = len(df) - len(keep_df)
 
             if keep_df.empty:
-                # nothing meaningful to plot
                 return
 
             # use session_start datetime as the x axis so plot is time-based
@@ -735,7 +789,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 y=total_hours_list,
                 mode="markers",
                 marker=dict(size=10, opacity=0.75, color="purple"),
-                text=[f"Dataset ID: {record['dataset_id']}<br>First Request Date: {format_datetime(record['first_request_date'])}<br>Publication Date: {format_datetime(record.get('publication_date'))}<br>Total Curation Time: {record['total_curation_hours']:.2f} hours" for record in total_time_records],
+                text=[f"Dataset ID: {record['dataset_id']}<br>Submission Date: {format_datetime(record['first_request_date'])}<br>Publication Date: {format_datetime(record.get('publication_date'))}<br>Total Curation Time: {record['total_curation_hours']:.2f} hours" for record in total_time_records],
                 hoverinfo="text",
                 name="Datasets",
             ))
@@ -755,9 +809,9 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                     hoverinfo="skip",
                 ))
             
-            fig.update_xaxes(title="First Request Date", type="date")
+            fig.update_xaxes(title="Submission Date", type="date")
             fig.update_yaxes(title="Total Curation Time (Hours)")
-            fig.update_layout(title="Total Time Spent Curating per Dataset by First Request Date")
+            fig.update_layout(title="Total Time Spent Curating per Dataset by Submission Date")
             fig.show()
 
     def metric_4d_gaps_between_sessions(curation_clusters, event_sequences):
@@ -872,7 +926,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 y=total_gaps_list,
                 mode="markers",
                 marker=dict(size=10, opacity=0.75, color="crimson"),
-                text=[f"Dataset ID: {record['dataset_id']}<br>First Request Date: {format_datetime(record['first_request_date'])}<br>Publication Date: {format_datetime(record.get('publication_date'))}<br>Total Gap Time: {record['total_gap_hours']:.2f} hours<br>Gap Count: {record['gap_count']}" for record in total_gaps_records],
+                text=[f"Dataset ID: {record['dataset_id']}<br>Submission Date: {format_datetime(record['first_request_date'])}<br>Publication Date: {format_datetime(record.get('publication_date'))}<br>Total Gap Time: {record['total_gap_hours']:.2f} hours<br>Gap Count: {record['gap_count']}" for record in total_gaps_records],
                 hoverinfo="text",
                 name="Datasets",
             ))
@@ -892,9 +946,9 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                     hoverinfo="skip",
                 ))
             
-            fig.update_xaxes(title="First Request Date", type="date")
+            fig.update_xaxes(title="Submission Date", type="date")
             fig.update_yaxes(title="Total Gap Time (Hours)")
-            fig.update_layout(title="Total Gaps Between Curation Sessions per Dataset by First Request Date")
+            fig.update_layout(title="Total Gaps Between Curation Sessions per Dataset by Submission Date")
             fig.show()
 
     def metric_5_datasets_vs_clusters(curation_clusters, event_sequences):
@@ -926,7 +980,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             fig = go.Figure()
             first_request_dates = [record["first_request_date"] for record in cluster_records]
             total_clusters = [record["total_clusters"] for record in cluster_records]
-            fig.add_trace(go.Scatter(x=first_request_dates, y=total_clusters, mode="markers", marker=dict(size=10, opacity=0.75, color="teal"), text=[f"Dataset ID: {record['dataset_id']}<br>First Request Date: {format_datetime(record['first_request_date'])}<br>Publication Date: {format_datetime(record.get('publication_date'))}<br>Total Curations: {record['total_clusters']}<br>Status Sequences: {record['sequence_count']}" for record in cluster_records], hoverinfo="text", name="Datasets"))
+            fig.add_trace(go.Scatter(x=first_request_dates, y=total_clusters, mode="markers", marker=dict(size=10, opacity=0.75, color="teal"), text=[f"Dataset ID: {record['dataset_id']}<br>Submission Date: {format_datetime(record['first_request_date'])}<br>Publication Date: {format_datetime(record.get('publication_date'))}<br>Total Curations: {record['total_clusters']}<br>Status Sequences: {record['sequence_count']}" for record in cluster_records], hoverinfo="text", name="Datasets"))
             if len(cluster_records) >= 2:
                 x_numeric = np.array(mdates.date2num(first_request_dates), dtype=float)
                 y_numeric = np.array(total_clusters, dtype=float)
@@ -934,11 +988,11 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 x_line = np.linspace(x_numeric.min(), x_numeric.max(), 100)
                 y_line = slope * x_line + intercept
                 fig.add_trace(go.Scatter(x=mdates.num2date(x_line), y=y_line, mode="lines", line=dict(color="black", width=2), name="Trend line", hoverinfo="skip"))
-            fig.update_xaxes(title="First Request Date")
+            fig.update_xaxes(title="Submission Date")
             fig.update_yaxes(title="Curation Sessions")
-            fig.update_layout(title="Datasets by First Request Date and Total Curations Sessions")
+            fig.update_layout(title="Datasets by Submission Date and Total Curations Sessions")
             fig.show()
-            fig = px.box(pd.DataFrame(cluster_records), x="first_request_year", y="total_clusters", hover_data=["dataset_id", "publication_date"], points="all", title="Curation Sessions per Dataset by First Request Year", labels={"first_request_year": "First Request Year", "total_clusters": "Curation Sessions", "dataset_id": "Dataset ID", "publication_date": "Publication Date"})
+            fig = px.box(pd.DataFrame(cluster_records), x="first_request_year", y="total_clusters", hover_data=["dataset_id", "publication_date"], points="all", title="Curation Sessions per Dataset by Submission Year", labels={"first_request_year": "Submission Year", "total_clusters": "Curation Sessions", "dataset_id": "Dataset ID", "publication_date": "Publication Date"})
             fig.show()
 
     def metric_6_avg_cluster_length(curation_clusters, event_sequences):
@@ -975,7 +1029,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             fig = go.Figure()
             first_request_dates = [record["first_request_date"] for record in cluster_length_records]
             average_cluster_lengths = [record["average_cluster_length"] for record in cluster_length_records]
-            fig.add_trace(go.Scatter(x=first_request_dates, y=average_cluster_lengths, mode="markers", marker=dict(size=10, opacity=0.75, color="darkorange"), text=[f"Dataset ID: {record['dataset_id']}<br>First Request Date: {format_datetime(record['first_request_date'])}<br>Publication Date: {format_datetime(record.get('publication_date'))}<br>Average Curation Density: {record['average_cluster_length']:.2f}<br>Clusters: {record['cluster_count']}" for record in cluster_length_records], hoverinfo="text", name="Datasets"))
+            fig.add_trace(go.Scatter(x=first_request_dates, y=average_cluster_lengths, mode="markers", marker=dict(size=10, opacity=0.75, color="darkorange"), text=[f"Dataset ID: {record['dataset_id']}<br>Submission Date: {format_datetime(record['first_request_date'])}<br>Publication Date: {format_datetime(record.get('publication_date'))}<br>Average Curation Density: {record['average_cluster_length']:.2f}<br>Clusters: {record['cluster_count']}" for record in cluster_length_records], hoverinfo="text", name="Datasets"))
             if len(cluster_length_records) >= 2:
                 x_numeric = np.array(mdates.date2num(first_request_dates), dtype=float)
                 y_numeric = np.array(average_cluster_lengths, dtype=float)
@@ -983,11 +1037,11 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 x_line = np.linspace(x_numeric.min(), x_numeric.max(), 100)
                 y_line = slope * x_line + intercept
                 fig.add_trace(go.Scatter(x=mdates.num2date(x_line), y=y_line, mode="lines", line=dict(color="black", width=2), name="Trend line", hoverinfo="skip"))
-            fig.update_xaxes(title="First Request Date")
+            fig.update_xaxes(title="Submission Date")
             fig.update_yaxes(title="Average Curation Density")
-            fig.update_layout(title="Datasets by First Request Date and Average Curation Density")
+            fig.update_layout(title="Datasets by Submission Date and Average Curation Density")
             fig.show()
-            fig = px.box(pd.DataFrame(cluster_length_records), x="first_request_year", y="average_cluster_length", hover_data=["dataset_id", "publication_date"], points="all", title="Average Curation Density per Dataset by First Request Year", labels={"first_request_year": "First Request Year", "average_cluster_length": "Average Curation Density", "dataset_id": "Dataset ID", "publication_date": "Publication Date"})
+            fig = px.box(pd.DataFrame(cluster_length_records), x="first_request_year", y="average_cluster_length", hover_data=["dataset_id", "publication_date"], points="all", title="Average Curation Density per Dataset by Submission Year", labels={"first_request_year": "Submission Year", "average_cluster_length": "Average Curation Density", "dataset_id": "Dataset ID", "publication_date": "Publication Date"})
             fig.show()
 
     def metric_7_category_mix_by_year(curator_categories, event_sequences):
@@ -1008,12 +1062,11 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         # order legend by overall volume
         ordered = list(df.groupby("category")["count"].sum().sort_values(ascending=False).index)
 
-        # raw counts
         fig = px.bar(
             df, x="year", y="count", color="category",
             category_orders={"category": ordered},
-            title="Curator Event Category Mix per First Request Year (Counts)",
-            labels={"year": "First Request Year", "count": "Curator Events", "category": "Category"},
+            title="Curator Event Category Mix per Submission Year (Counts)",
+            labels={"year": "Submission Year", "count": "Curator Events", "category": "Category"},
         )
         fig.update_layout(barmode="stack")
         fig.show()
@@ -1023,15 +1076,15 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         fig = px.bar(
             df, x="year", y="pct", color="category",
             category_orders={"category": ordered},
-            title="Curator Event Category Mix per First Request Year (% within year)",
-            labels={"year": "First Request Year", "pct": "% of Curator Events", "category": "Category"},
+            title="Curator Event Category Mix per Submission Year (% within year)",
+            labels={"year": "Submission Year", "pct": "% of Curator Events", "category": "Category"},
         )
         fig.update_layout(barmode="stack")
         fig.update_yaxes(range=[0, 100], ticksuffix="%")
         fig.show()
 
     def metric_7b_metadata_types_by_pub_year(curator_categories, event_sequences):
-        # Metadata-subcategory mix per publication year (published datasets only).
+        # Metadata-subcategory mix per publication year (published datasets only)
         per_dataset_metadata = curator_categories.get("per_dataset_metadata", {})
         records = []
         for dataset_id, subcat_counts in per_dataset_metadata.items():
@@ -1048,7 +1101,6 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         df = pd.DataFrame(records).groupby(["year", "type"])["count"].sum().reset_index()
         ordered = list(df.groupby("type")["count"].sum().sort_values(ascending=False).index)
 
-        # raw counts
         fig = px.bar(
             df, x="year", y="count", color="type",
             category_orders={"type": ordered},
@@ -1085,8 +1137,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
 
             req_date = first_request_date(dataset_id, event_sequences)
 
-            # exclude when the nearest export (by updated ts) postdates either event
-            if (req_date and effective_after_event(dataset_record, req_date)) or \
+            if graph_excluded(dataset_id, dataset_record, event_sequences) or \
+               (req_date and effective_after_event(dataset_record, req_date)) or \
                effective_after_event(dataset_record, pub_date):
                 continue
 
@@ -1121,7 +1173,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         fig.show()
         fig2 = px.bar(
             req_df, x="dataset_count", y="type", orientation="h",
-            title="Most Common Error Types at First Request (by # of datasets)",
+            title="Most Common Error Types at Submission (by # of datasets)",
             labels={"dataset_count": "Number of Datasets", "type": "Error Type"},
         )
         fig2.show()
@@ -1129,7 +1181,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
     def metric_1b_subsequent_pub(temporal_report, event_sequences):
         records = []
         for dataset_id, dataset_record in temporal_report.items():
-            if is_excluded_dataset(dataset_id):
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, dataset_record, event_sequences):
                 continue
             error_graph = dataset_record.get("error_graph", {})
             if not error_graph:
@@ -1148,7 +1200,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
     def metric_1d_subsequent_pub(temporal_report, event_sequences):
         pub_records = []
         for dataset_id, dataset_record in temporal_report.items():
-            if is_excluded_dataset(dataset_id):
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, dataset_record, event_sequences):
                 continue
             error_graph = dataset_record.get("error_graph", {})
             if not error_graph:
@@ -1174,6 +1226,155 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         )
         fig.show()
 
+    def metric_1g_avg_distinct_errors_by_period(temporal_report, event_sequences):
+        # distinct errors at submission per dataset, averaged over datasets binned by the submission year, quarter, month.
+        records = []
+
+        for dataset_id, dataset_record in temporal_report.items():
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, dataset_record, event_sequences):
+                continue
+            if not dataset_record.get("error_graph"):
+                continue
+
+            submission = first_request_date(dataset_id, event_sequences)
+
+            if submission is None or effective_after_event(dataset_record, submission):
+                continue
+
+            records.append({"submission": submission, "distinct": distinct_errors_at(dataset_record, submission)})
+
+        if not records:
+            return
+
+        df = pd.DataFrame(records)
+        df["submission"] = pd.to_datetime(df["submission"], utc=True)
+
+        periods = {
+            "Year": df["submission"].dt.year.astype(str),
+            "Quarter": df["submission"].dt.year.astype(str) + "-Q" + df["submission"].dt.quarter.astype(str),
+            "Month": df["submission"].dt.strftime("%Y-%m"),
+        }
+
+        for label, period in periods.items():
+            grouped = df.assign(period=period).groupby("period")["distinct"].mean().reset_index()
+            fig = px.bar(
+                grouped, x="period", y="distinct",
+                title=f"Average Distinct Errors per Dataset at Submission (by {label})",
+                labels={"period": label, "distinct": "Avg Distinct Errors / Dataset"},
+            )
+            fig.show()
+
+    def metric_1h_soda_vs_nonsoda_submission(temporal_report, event_sequences):
+        # total distinct errors per dataset at submission, SODA vs non-SODA
+        # 3.0.0 submissions excluded.
+        records = []
+
+        for dataset_id, dataset_record in temporal_report.items():
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, dataset_record, event_sequences):
+                continue
+            if not dataset_record.get("error_graph"):
+                continue
+
+            submission = first_request_date(dataset_id, event_sequences)
+
+            if submission is None or effective_after_event(dataset_record, submission):
+                continue
+            if template_version_near(dataset_record, submission) == "3.0.0":
+                continue
+
+            group = "SODA" if dataset_record.get("uses_soda") else "non-SODA"
+            records.append({"group": group, "distinct": distinct_errors_at(dataset_record, submission), "dataset_id": dataset_id})
+
+        if not records:
+            return
+
+        df = pd.DataFrame(records)
+        fig = px.box(
+            df, x="group", y="distinct", points="all", hover_data=["dataset_id"],
+            title="Distinct Errors per Dataset at Submission: SODA vs non-SODA (3.0.0 excluded)",
+            labels={"group": "", "distinct": "Distinct Errors / Dataset", "dataset_id": "Dataset ID"},
+        )
+        fig.show()
+
+    def metric_1i_lab_improvement_across_submissions(temporal_report, event_sequences):
+        # for each lab (= award number) with >=2 submitted datasets, errors at submission
+        # across its successive submissions (its datasets' first cycles, ordered by
+        # submission date): a faint line per lab, plus a bold mean-across-labs line.
+        ordinal_words = ["First", "Second", "Third", "Fourth", "Fifth", "Sixth",
+                         "Seventh", "Eighth", "Ninth", "Tenth"]
+
+        def ordinal_label(n):
+            return f"{ordinal_words[n - 1]} Submission" if n <= len(ordinal_words) else f"Submission #{n}"
+
+        by_lab = defaultdict(list)
+
+        for dataset_id, dataset_record in temporal_report.items():
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, dataset_record, event_sequences):
+                continue
+            if not dataset_record.get("error_graph"):
+                continue
+
+            submission = first_request_date(dataset_id, event_sequences)
+
+            if submission is None or effective_after_event(dataset_record, submission):
+                continue
+
+            award = award_number_near(dataset_record, submission)
+
+            if not award or award == "<unknown>":
+                continue
+
+            by_lab[award].append((submission, distinct_errors_at(dataset_record, submission), dataset_id))
+
+        # cap at the first 8 submissions per lab
+        cap = 8
+        by_lab = {award: sorted(points)[:cap] for award, points in by_lab.items() if len(points) >= 2}
+
+        if not by_lab:
+            return
+
+        max_submissions = max(len(points) for points in by_lab.values())
+        categories = [ordinal_label(n) for n in range(1, max_submissions + 1)]
+
+        fig = go.Figure()
+        by_ordinal = defaultdict(list)
+
+        for award, points in by_lab.items():
+            labels = [ordinal_label(n) for n in range(1, len(points) + 1)]
+            distinct = [value for _, value, _ in points]
+
+            for n, value in enumerate(distinct, start=1):
+                by_ordinal[n].append(value)
+
+            fig.add_trace(go.Scatter(
+                x=labels, y=distinct, mode="lines+markers",
+                line=dict(color="steelblue", width=1), marker=dict(size=5), opacity=0.35,
+                showlegend=False, hoverinfo="text",
+                text=[f"Award: {award}<br>{label}<br>Errors at Submission: {value}<br>Dataset ID: {dataset_id}"
+                      for label, value, (_, _, dataset_id) in zip(labels, distinct, points)],
+            ))
+
+        # only average over ordinals shared by enough labs, so the tail isn't a single lab
+        ordinals = [n for n in sorted(by_ordinal) if len(by_ordinal[n]) >= 3]
+        means = [sum(by_ordinal[n]) / len(by_ordinal[n]) for n in ordinals]
+
+        fig.add_trace(go.Scatter(
+            x=[ordinal_label(n) for n in ordinals], y=means, mode="lines+markers",
+            line=dict(color="crimson", width=3), marker=dict(size=9),
+            name="Mean across labs",
+            text=[f"{ordinal_label(n)}<br>Mean: {mean:.2f}<br>Labs: {len(by_ordinal[n])}"
+                  for n, mean in zip(ordinals, means)],
+            hoverinfo="text",
+        ))
+
+        fig.update_layout(
+            title=f"Errors at Submission Across a Lab's Successive Submissions (labs with ≥2 datasets, n={len(by_lab)})",
+            xaxis_title="Submission (same award number)",
+            yaxis_title="Errors at Submission",
+        )
+        fig.update_xaxes(categoryorder="array", categoryarray=categories)
+        fig.show()
+
     metric_toggles = {
         "metric_1_standards_adherence": True,
         "metric_1b_error_types": True,
@@ -1182,6 +1383,9 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         "metric_1e_top_error_types": True,
         "metric_1b_subsequent_pub": True,
         "metric_1d_subsequent_pub": True,
+        "metric_1g_avg_distinct_errors_by_period": True,
+        "metric_1h_soda_vs_nonsoda_submission": True,
+        "metric_1i_lab_improvement_across_submissions": True,
         "metric_2_time_to_publication": True,
         "metric_2b_quarters_to_publication": False,
         "metric_3_event_types": False,
@@ -1192,7 +1396,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         "metric_4e_total_gaps_per_dataset": False,
         "metric_5_datasets_vs_clusters": False,
         "metric_6_avg_cluster_length": False,
-        "metric_7_category_mix_by_year": False,
+        "metric_7_category_mix_by_year": True,
         "metric_7b_metadata_types_by_pub_year": False,
     }
     
@@ -1214,6 +1418,12 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         metric_1b_subsequent_pub(temporal_report, event_sequences)
     if metric_toggles.get("metric_1d_subsequent_pub"):
         metric_1d_subsequent_pub(temporal_report, event_sequences)
+    if metric_toggles.get("metric_1g_avg_distinct_errors_by_period"):
+        metric_1g_avg_distinct_errors_by_period(temporal_report, event_sequences)
+    if metric_toggles.get("metric_1h_soda_vs_nonsoda_submission"):
+        metric_1h_soda_vs_nonsoda_submission(temporal_report, event_sequences)
+    if metric_toggles.get("metric_1i_lab_improvement_across_submissions"):
+        metric_1i_lab_improvement_across_submissions(temporal_report, event_sequences)
     if metric_toggles.get("metric_2_time_to_publication"):
         metric_2_time_to_publication(event_sequences)
     if metric_toggles.get("metric_2b_quarters_to_publication"):
