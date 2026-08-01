@@ -155,11 +155,16 @@ def get_canonical_title(error_type):
     return TITLE_TO_CANON.get(title, title)
 
 
-def is_excluded_dataset(dataset_id):
+def normalize_dataset_id(dataset_id):
+    if dataset_id.startswith("N:dataset:"):
+        return dataset_id
     if dataset_id.startswith("dataset:"):
-        dataset_id = "N:" + dataset_id
-    elif not dataset_id.startswith("N:dataset:"):
-        dataset_id = "N:dataset:" + dataset_id
+        return "N:" + dataset_id
+    return "N:dataset:" + dataset_id
+
+
+def is_excluded_dataset(dataset_id):
+    dataset_id = normalize_dataset_id(dataset_id)
     return dataset_id in EXCLUDED_DATASET_IDS or dataset_id not in WHITELIST_DATASET_IDS
 
 
@@ -204,7 +209,7 @@ def fiscal_year(dt):
     return None if dt is None else dt.year if dt.month >= 2 else dt.year - 1
 
 
-_true_submission_dates = None
+_curation_start_rows = None
 
 
 def _curation_start_source():
@@ -216,25 +221,80 @@ def _curation_start_source():
     return "./curation_start_dates.csv"
 
 
-def true_submission_date(dataset_id):
-    """'True' submission date for a dataset's first publication cycle, from the
-    verified export (falling back to the computed csv). Parsed leniently, so
-    hand-entered values in mixed formats still resolve. None if absent."""
-    global _true_submission_dates
+def _curation_start_row(dataset_id):
+    global _curation_start_rows
 
-    if _true_submission_dates is None:
-        _true_submission_dates = {}
+    if _curation_start_rows is None:
+        _curation_start_rows = {}
         try:
             # utf-8-sig strips the BOM Excel prepends on CSV export
             with open(_curation_start_source(), encoding="utf-8-sig") as f:
                 for row in csv.DictReader(f):
-                    value = (row.get("true_submission_date") or "").strip()
-                    if value:
-                        _true_submission_dates[row["dataset_id"]] = value
+                    _curation_start_rows[row["dataset_id"]] = row
         except FileNotFoundError:
             pass
 
-    return parse_date(_true_submission_dates.get(dataset_id))
+    return _curation_start_rows.get(dataset_id)
+
+
+def true_submission_date(dataset_id):
+    row = _curation_start_row(dataset_id)
+    return parse_date(row.get("true_submission_date")) if row else None
+
+
+def true_publication_date(dataset_id):
+    row = _curation_start_row(dataset_id)
+    return parse_date(row.get("publication_date")) if row else None
+
+
+RECONCILIATION_SOURCE = "./SPARC_pipeline_published_reconciliation.csv"
+_reconciliation_rows = None
+
+
+def _reconciliation_row(dataset_id):
+    # keyed by node_id; header keys stripped (the source has a trailing space on "scaffold ")
+    global _reconciliation_rows
+
+    if _reconciliation_rows is None:
+        _reconciliation_rows = {}
+        try:
+            with open(RECONCILIATION_SOURCE, encoding="utf-8-sig") as f:
+                for raw in csv.DictReader(f):
+                    row = {(key or "").strip(): value for key, value in raw.items()}
+                    node_id = (row.get("node_id") or "").strip()
+                    if node_id:
+                        _reconciliation_rows[node_id] = row
+        except FileNotFoundError:
+            pass
+
+    return _reconciliation_rows.get(normalize_dataset_id(dataset_id))
+
+
+def dataset_type(dataset_id):
+    row = _reconciliation_row(dataset_id)
+    return (row.get("dataset_type") or "").strip() if row else ""
+
+
+def is_scaffold(dataset_id):
+    row = _reconciliation_row(dataset_id)
+    return bool(row) and (row.get("scaffold") or "").strip().lower() == "yes"
+
+
+def is_excluded_computational(dataset_id):
+    return dataset_type(dataset_id) == "computational" and is_scaffold(dataset_id)
+
+
+def doi_v1(dataset_id):
+    row = _reconciliation_row(dataset_id)
+    return (row.get("DOI V1") or "").strip() if row else ""
+
+
+def reconciliation_publication_year(dataset_id):
+    row = _reconciliation_row(dataset_id)
+    if not row:
+        return None
+    value = (row.get("publication_year") or "").strip()
+    return int(value) if value.isdigit() else None
 
 
 with open("./error-info.json") as _ef:

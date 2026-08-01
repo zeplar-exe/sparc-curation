@@ -16,6 +16,9 @@ from report_common import (
     USE_ERROR_INDEX_GRAPH,
     is_excluded_dataset,
     true_submission_date,
+    true_publication_date,
+    is_excluded_computational,
+    reconciliation_publication_year,
     parse_iso8601,
     parse_mmddyyyy,
     fiscal_year,
@@ -90,6 +93,10 @@ def format_datetime(value):
 
 
 def first_publication_date(dataset_id, event_sequences):
+    # prefer the hand-verified A7 publication date; fall back to the first cycle's accept
+    true_pub = true_publication_date(dataset_id)
+    if true_pub is not None:
+        return true_pub
     events = event_sequences.get(dataset_id)
     if not events:
         return None
@@ -103,8 +110,7 @@ def publication_dates(dataset_id, event_sequences):
 
 
 def first_request_date(dataset_id, event_sequences, floor=True):
-    # The 2022-04-01 floor is the error-analysis window; timing metrics that only
-    # use event timestamps (time-to-publication) pass floor=False to opt out.
+    # The 2022-04-01 floor is the error-analysis window; floor=False to opt out
     min_date = datetime.datetime(2022, 4, 1, tzinfo=datetime.timezone.utc)
 
     # prefer the "true" submission date (curation_start_dates.csv); fall back to the
@@ -126,14 +132,6 @@ def first_request_date(dataset_id, event_sequences, floor=True):
         return None
 
     return min(request_dates)
-
-
-def dataset_type_near(dataset_record, event_dt):
-    if event_dt is None:
-        return ""
-
-    key = nearest_export_key_effective(dataset_record, int(event_dt.timestamp()))
-    return (dataset_record.get("dataset_type_graph") or {}).get(key, "")
 
 
 def template_version_near(dataset_record, event_dt):
@@ -159,15 +157,27 @@ def distinct_errors_at(dataset_record, event_dt):
 
 
 def graph_excluded(dataset_id, dataset_record, event_sequences):
-    """Dataset-level exclusion for the error graphs, on top of is_excluded_dataset:
-    drop when the true submission is missing / before the 2022-04 window, or the
-    dataset_type at submission is computational."""
+    """Drop a dataset from the error graphs when its submission or publication is
+    missing / before the 2022-04 window, or it's a computational scaffold."""
+    min_date = datetime.datetime(2022, 4, 1, tzinfo=datetime.timezone.utc)
+
     submission = first_request_date(dataset_id, event_sequences)
 
     if submission is None:
         return True
 
-    if dataset_type_near(dataset_record, submission) == "computational":
+    publication = first_publication_date(dataset_id, event_sequences)
+
+    if publication is not None and publication < min_date:
+        return True
+
+    # a reconciliation publication_year before 2022 means an earlier cycle than pennsieve shows
+    recon_year = reconciliation_publication_year(dataset_id)
+
+    if recon_year is not None and recon_year < 2022:
+        return True
+
+    if is_excluded_computational(dataset_id):
         return True
 
     return False
@@ -1297,9 +1307,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         fig.show()
 
     def metric_1i_lab_improvement_across_submissions(temporal_report, event_sequences):
-        # for each lab (= award number) with >=2 submitted datasets, errors at submission
-        # across its successive submissions (its datasets' first cycles, ordered by
-        # submission date): a faint line per lab, plus a bold mean-across-labs line.
+        # errors at submission across a lab's (= award number's) successive submissions:
+        # a faint line per lab (>=2 datasets), plus a bold mean-across-labs line.
         ordinal_words = ["First", "Second", "Third", "Fourth", "Fifth", "Sixth",
                          "Seventh", "Eighth", "Ninth", "Tenth"]
 

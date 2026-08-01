@@ -6,6 +6,7 @@ import csv
 from random import shuffle
 import traceback
 from test_formats import match_error
+from report_common import dataset_type as reconciliation_dataset_type
 from tqdm import tqdm
 import os
 import asyncio
@@ -104,7 +105,6 @@ class TemporalReporter(Reporter):
     class DatasetReport:
         id: str
         title: str = "<unknown>"
-        dataset_type_graph: dict[int, str] = field(default_factory=lambda: defaultdict(str))
         template_version_graph: dict[int, str] = field(default_factory=lambda: defaultdict(str))
         award_number_graph: dict[int, str] = field(default_factory=lambda: defaultdict(str))
         status_counts: Counter = field(default_factory=Counter)
@@ -124,7 +124,7 @@ class TemporalReporter(Reporter):
                 "id": self.id,
                 "title": self.title,
                 "status_counts": dict(self.status_counts),
-                "dataset_type_graph": dict(sorted({str(ts): typ for ts, typ in self.dataset_type_graph.items()}.items())),
+                "dataset_type": reconciliation_dataset_type(self.id),
                 "template_version_graph": dict(sorted({str(ts): version for ts, version in self.template_version_graph.items()}.items())),
                 "award_number_graph": dict(sorted({str(ts): award_number for ts, award_number in self.award_number_graph.items()}.items())),
                 "export_urls": sorted(self.export_urls, key=lambda x: x["unix_timestamp"]),
@@ -200,10 +200,6 @@ class TemporalReporter(Reporter):
         report.curation_index_graph[unix_timestamp] = file_data.get("status", {}).get("curation_index", -1)
         report.submission_index_graph[unix_timestamp] = file_data.get("status", {}).get("submission_index", -1)
         
-        dataset_type = file_data.get("meta", {}).get("dataset_type", "<unknown>")
-        dataset_type = dataset_type or file_data.get("inputs", {}).get("dataset_description_file", {}).get("dataset_type", "<unknown>")
-        report.dataset_type_graph[unix_timestamp] = dataset_type
-
         dataset_uuid = id.split(":")[2]
         safe_timestamp = timestamp.replace(":", "")
         url = f"https://cassava.ucsd.edu/sparc/datasets/{dataset_uuid}/{safe_timestamp}.tar.xz"
@@ -483,3 +479,18 @@ if __name__ == "__main__":
 # ensure whether cases where EITHER req or pub date is before april 2022, the dataset is excluded entirely (even if pub only)
 # why do the two error at submission graphs disagree? (yearly/monthly/quarterly vs yearly)
 
+# fall schedule to Edyta once have
+    # also what about the curation onboarding?
+# + we also need to notify that the needs manual review columns are supposed to be checked because the gap is less than a day
+    # so what do we do about those? because ofc it's correct but it's not valid?
+# + new lab graph
+    # bring up that only n=17, does that sound right? for >2 datasets
+
+
+# use https://api.pennsieve.io/discover/datasets/{datasetId}/versions firstPublishedAt
+# start doing a write up of how all the data is being collected (sources, processes, step 1 to 10)
+# take the new verified dates from Anka when they get pushed
+# there should always be a request before firstPublishedDate (and we're ignoring if either is before 2022 april anyways)
+    # see if using the original true submission date will bring in more datasets (due to the 2022 straddling)
+    
+# ping anka by end of friday if above is not done
