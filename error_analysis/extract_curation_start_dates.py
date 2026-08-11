@@ -100,12 +100,12 @@ def main():
                     curator_touch = raw
                     break
 
-            # 3. the request that opened this cycle (if it falls in the window)
+            # 3. the request that opened this cycle
             request = parse_iso8601(request_raw)
             request_publication = request_raw if (request is not None and in_window(request)) else ""
 
             # "true" submission date:
-            #  - earliest of (ready-for-curation status change, request pub/embargo)
+            #  - earliest of ready-for-curation status change, request pub/embargo
             #  - if request->publication is under MIN_LENGTH_DAYS, use curator first touch
             #  - if the result is still under MANUAL_REVIEW_DAYS before publication -> flag
             status_dt = parse_iso8601(update_status) if update_status else None

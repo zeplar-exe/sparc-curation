@@ -4,6 +4,8 @@ A positive value means the chosen export's effective (updated) timestamp is AFTE
 the row's event -- i.e. the event predates every export, so the nearest export is
 a fallback. This checks whether the true-submission date (which can be earlier than
 the raw request) is what pushed those submission rows negative->positive.
+
+> Thanks Claude.
 """
 
 import csv

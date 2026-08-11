@@ -3,7 +3,7 @@ import datetime
 import json
 from datetime import timezone
 from collections import Counter, defaultdict
-from report_common import is_excluded_dataset, parse_iso8601, is_excluded_error_type, get_error_type_format, get_error_format_dict_data, get_error_id, true_submission_date, true_publication_date, is_excluded_computational, dataset_type, doi_v1, reconciliation_publication_year
+from report_common import is_excluded_dataset, parse_iso8601, is_excluded_error_type, get_error_type_format, get_error_format_dict_data, get_error_id, true_submission_date, true_publication_date, is_excluded_computational, dataset_type, doi_v1, reconciliation_publication_year, nearest_export_key_effective, error_types_near_effective, effective_export_ts_by_key
 
 EVENT_SEQUENCES = "./pennsieve_event_series.json"
 TEMPORAL_REPORT = "./temporal_report.json"
@@ -12,12 +12,8 @@ OUT = "./SPARC_error_results_matrix_table.generated.csv"
 
 FAIL_RADIUS = 5
 
+# the shared nearest-export logic in report_common keys off the 'updated' timestamp
 TIMESTAMP_MODE = "updated"
-TS_MODE_KEY = {
-    "export_start": None,
-    "updated_contents": "timestamp_updated_contents",
-    "updated": "timestamp_updated",
-}
 
 FIXED_FIELDS = [
     "dataset_id",
@@ -48,42 +44,6 @@ FIXED_FIELDS = [
 # + add [meta][dataset_type] graph and include a column in the matrix
 # + test using timestamp_updated and timestamp_contents_updated instead of timestamp export start
 # + for failed exports, just leave all error fields empty
-
-
-def nearest_index(target_ts, sorted_ts):
-    if not sorted_ts:
-        return None
-    
-    pos = None
-    
-    for i, ts in enumerate(sorted_ts):
-        if ts <= target_ts:
-            pos = i
-        else:
-            break
-    
-    return pos if pos is not None else 0
-
-
-def nearest_graph_value(graph, target_ts):
-    if not graph:
-        return None
-    
-    items = sorted(((int(k), v) for k, v in graph.items()), key=lambda kv: kv[0])
-    pos = nearest_index(target_ts, [t for t, _ in items])
-    
-    return items[pos][1] if pos is not None else None
-
-
-def effective_export_ts(export, updated_graph):
-    start = export["unix_timestamp"]
-    graph_key = TS_MODE_KEY[TIMESTAMP_MODE]
-    
-    if graph_key is None:
-        return start
-    
-    alt = (updated_graph.get(str(start)) or {}).get(graph_key)
-    return alt if alt is not None else start
 
 
 def main():
@@ -137,17 +97,15 @@ def main():
 
         eligible = [first_cycle]
 
-        updated_graph = record.get("export_ts_to_updated_ts_graph") or {}
         exports = record.get("export_urls") or []
 
         if not exports:
             continue
 
-        exports = sorted(exports, key=lambda e: effective_export_ts(e, updated_graph))
-        export_ts = [effective_export_ts(e, updated_graph) for e in exports]
+        export_by_key = {str(e["unix_timestamp"]): e for e in exports}
+        eff_ts_by_key = effective_export_ts_by_key(record)
 
         title = record.get("title", "<unknown>")
-        error_graph = record.get("error_graph", {})
         curation_index_graph = record.get("curation_index_graph", {})
         error_index_graph = record.get("error_index_graph", {})
         submission_index_graph = record.get("submission_index_graph", {})
@@ -170,16 +128,15 @@ def main():
                 ("publication", acc, acc_raw),
             ):        
                 event_ts = int(event_dt.timestamp())
-                pos: int = nearest_index(event_ts, export_ts)
-                
-                export = exports[pos]
+                key = nearest_export_key_effective(record, event_ts)
+
+                export = export_by_key[key]
                 export_unix = export["unix_timestamp"]
-                eff_ts = export_ts[pos]
-                key = str(export_unix)
+                eff_ts = eff_ts_by_key[key]
 
                 failed = error_index_graph.get(key) == 9999
 
-                snapshot = {m: int(c) for m, c in (error_graph.get(key) or {}).items() if c > 0}
+                snapshot = error_types_near_effective(record, event_dt) or {}
                 included = sum(1 for m in snapshot if not is_excluded_error_type(m))
                 excluded = sum(1 for m in snapshot if is_excluded_error_type(m))
 
@@ -192,17 +149,18 @@ def main():
                             continue
                         path = message.split(":")[0]
                         fmt = get_error_type_format(message)
-                        # data = get_error_format_dict_data(fmt)
+                        data = get_error_format_dict_data(fmt)
+                        #print(fmt)
                         # if not data:
                         #    continue
-                        full = message # f"{path}:{fmt}"
+                        full = data["Error Title"] if data else message
+                        # full = message # f"{path}:{fmt}"
                         message_totals[full] += 1
                         datasets_by_message[full].add(dataset_id)
                         message_to_path[full] = path
                         message_to_id[full] = get_error_id(message)
 
                 eff = datetime.datetime.fromtimestamp(eff_ts, datetime.timezone.utc)
-                print(eff.isoformat().replace('+00:00', 'Z'))
                 fixed = {
                     "dataset_id": dataset_id.replace("N:", ""),
                     "award_number": award_number,

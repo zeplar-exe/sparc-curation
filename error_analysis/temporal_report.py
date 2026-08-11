@@ -487,10 +487,10 @@ if __name__ == "__main__":
     # bring up that only n=17, does that sound right? for >2 datasets
 
 
-# use https://api.pennsieve.io/discover/datasets/{datasetId}/versions firstPublishedAt
-# start doing a write up of how all the data is being collected (sources, processes, step 1 to 10)
+# + use https://api.pennsieve.io/discover/datasets/{datasetId}/versions firstPublishedAt as ground truth publish date
+    # there should always be a request before firstPublishedDate (and we're ignoring if either is before 2022 april anyways)
+        # see if using the original true submission date will bring in more datasets (due to the 2022 straddling)
+
 # take the new verified dates from Anka when they get pushed
-# there should always be a request before firstPublishedDate (and we're ignoring if either is before 2022 april anyways)
-    # see if using the original true submission date will bring in more datasets (due to the 2022 straddling)
     
-# ping anka by end of friday if above is not done
+# start doing a write up of how all the data is being collected (sources, processes, step 1 to 10)

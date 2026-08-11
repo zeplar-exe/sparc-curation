@@ -1,43 +1,27 @@
 import csv
-import datetime
 import json
+
+from report_common import is_excluded_dataset, parse_iso8601, true_submission_date, true_publication_date
 
 EVENT_SEQUENCES = "./pennsieve_event_series.json"
 OUT = "./sub_day_publications.csv"
 
-EXCLUDED_DATASET_IDS = []
 
-with open("./dataset_exclusion_list.csv") as f:
-    for row in csv.DictReader(f):
-        EXCLUDED_DATASET_IDS.append(row["Dataset ID"])
-
-WHITELIST_DATASET_IDS = []
-with open("./big-did.json") as f:
-    for entry in json.load(f):
-        WHITELIST_DATASET_IDS.append(entry)
-
-
-def is_excluded_dataset(dataset_id):
-    if dataset_id.startswith("dataset:"):
-        dataset_id = "N:" + dataset_id
-    elif not dataset_id.startswith("N:dataset:"):
-        dataset_id = "N:dataset:" + dataset_id
-    return dataset_id in EXCLUDED_DATASET_IDS or dataset_id not in WHITELIST_DATASET_IDS
-
-
-def parse_iso8601(date_str):
-    if not date_str:
-        return None
-    return datetime.datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-
-
-def first_request_date(cycles):
+def first_request_date(dataset_id, cycles):
+    # ground-truth submission date, falling back to the earliest raw request
+    true = true_submission_date(dataset_id)
+    if true is not None:
+        return true
     dates = [parse_iso8601(c.get("request_created")) for c in cycles]
     dates = [d for d in dates if d]
     return min(dates) if dates else None
 
 
-def first_publication_date(cycles):
+def first_publication_date(dataset_id, cycles):
+    # ground-truth publication date, falling back to the first cycle's raw accept
+    true = true_publication_date(dataset_id)
+    if true is not None:
+        return true
     return parse_iso8601(cycles[0].get("accept_created")) if cycles else None
 
 
@@ -53,14 +37,14 @@ def main():
         if not cycles:
             continue
 
-        req = first_request_date(cycles)
-        pub = first_publication_date(cycles)
+        req = first_request_date(dataset_id, cycles)
+        pub = first_publication_date(dataset_id, cycles)
         if not req or not pub or pub <= req:
             continue
 
         gap_seconds = (pub - req).total_seconds()
         
-        if gap_seconds >= 60*60*24:
+        if gap_seconds >= 5*60*60*24:
             continue
 
         rows.append({
@@ -91,7 +75,7 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
 
-    print(f"Wrote {len(rows)} sub-day (< 1 day request->publication) datasets to {OUT}")
+    print(f"Wrote {len(rows)} rows to {OUT}")
     if rows:
         print(f"Fastest: {rows[0]['gap_seconds']}s ({rows[0]['dataset_id']})")
         print(f"Slowest sub-day: {rows[-1]['gap_hours']}h ({rows[-1]['dataset_id']})")

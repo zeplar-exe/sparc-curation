@@ -1,5 +1,7 @@
 # tangled code
 sparcur/simple/*
+templates/
+bin/
 
 # Vim
 *.swp

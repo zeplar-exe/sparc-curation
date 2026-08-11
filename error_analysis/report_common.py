@@ -8,7 +8,7 @@ import re
 from dateutil import parser as dateutil_parser
 
 # Whether to use error_index_graph or error_graph for error-index lookups.
-USE_ERROR_INDEX_GRAPH = True
+USE_ERROR_INDEX_GRAPH = False
 
 SPARC_ORGANIZATION = "organization:618e8dd9-f8d2-4dc4-9abb-c6aaab2e78a0"
 
@@ -16,6 +16,7 @@ EXCLUDED_DATASET_IDS = []
 WHITELIST_DATASET_IDS = []
 INCLUDED_ERROR_FORMATS = []
 ERROR_DICTIONARY = []
+PENNSIEVE_DATASET_MAP = {}
 
 with open("./dataset_exclusion_list.csv") as f:
     for row in csv.DictReader(f):
@@ -25,16 +26,15 @@ with open("./big-did.json") as f:
     for did, entry in json.load(f).items():
         if entry["id_organization"] == SPARC_ORGANIZATION:
             WHITELIST_DATASET_IDS.append(did)
+        PENNSIEVE_DATASET_MAP[did] = entry["id_published"]
 
 with open("./SPARC_error_map.csv") as f:
     for row in csv.DictReader(f):
         INCLUDED_ERROR_FORMATS.append(row.get("Match Key (verbatim)", ""))
         ERROR_DICTIONARY.append(row)
 
-# error map (SPARC_error_map.csv) resolution: stored error_graph key -> canonical #
-# Rows collapse via `colaps to` (points at the canonical `#`). A stored key resolves
-# by its tag signature, or by matching the canonical row's Error Title, Type, Match
-# Key, or Legacy Title.
+# error map (SPARC_error_map.csv): stored error_graph key -> canonical #
+# Rows collapse via `colaps to`
 _error_map_rows = {row["#"].strip(): row for row in ERROR_DICTIONARY if row.get("#", "").strip()}
 
 TAG_KINDS = ("regex", "required", "expected_type", "allowed")
@@ -119,7 +119,7 @@ for row in ERROR_DICTIONARY:
         TAG_TO_ID.setdefault(signature, num)
         TAG_TO_CANON.setdefault(signature, canon_title)
 
-# exclusion is driven by the canonical row's own Excluded? flag
+# exclusion is driven by the canonical row's own Excluded flag
 for num, row in _error_map_rows.items():
     if _canonical_num(row) == num and (row.get("Excluded?") or "").strip().lower() == "yes":
         EXCLUDED_IDS.add(num)
@@ -133,8 +133,8 @@ def _title_of(error_type):
 
 
 def get_error_id(error_type):
-    """Canonical error-map `#` for a stored error_graph key ('' if unresolved).
-    Tag-aware: a tag signature resolves to the field/type-specific row first,
+    """Ground truth error-map # for a stored error_graph key
+    A tag (specific regex for ex) signature resolves to the field/type-specific row first,
     otherwise falls back to the base title."""
     signature = _tag_signature(error_type)
 
@@ -179,9 +179,8 @@ def parse_mmddyyyy(date_str):
 
 
 def parse_date(value):
-    """Generalized/lenient date parse for hand-verified values: accepts datetime
-    objects, ISO8601 strings, and free-form strings ('around 1/15/2019',
-    '12/21/2020'). Naive results are treated as UTC. None when nothing parses."""
+    """Generalized/lenient date parse for hand-verified values: accepts most free-form strings. 
+    None when nothing parses."""
     if value is None:
         return None
 
@@ -209,7 +208,8 @@ def fiscal_year(dt):
     return None if dt is None else dt.year if dt.month >= 2 else dt.year - 1
 
 
-_curation_start_rows = None
+COMPUTED_CURATION_START = "./curation_start_dates.csv"
+_start_rows_cache = {}
 
 
 def _curation_start_source():
@@ -217,39 +217,98 @@ def _curation_start_source():
     else the computed curation_start_dates.csv."""
     verified = glob.glob("./curation_start_dates_verified*.csv")
     if verified:
-        return max(verified, key=os.path.getmtime)
-    return "./curation_start_dates.csv"
+        return verified[-1]
+    return COMPUTED_CURATION_START
+
+
+def _start_rows(path):
+    if path not in _start_rows_cache:
+        rows = {}
+        try:
+            # utf-8-sig strips the BOM Excel prepends on CSV export
+            with open(path, encoding="utf-8-sig") as f:
+                for row in csv.DictReader(f):
+                    rows[row["dataset_id"]] = row
+        except FileNotFoundError:
+            pass
+        _start_rows_cache[path] = rows
+    return _start_rows_cache[path]
 
 
 def _curation_start_row(dataset_id):
-    global _curation_start_rows
-
-    if _curation_start_rows is None:
-        _curation_start_rows = {}
-        try:
-            # utf-8-sig strips the BOM Excel prepends on CSV export
-            with open(_curation_start_source(), encoding="utf-8-sig") as f:
-                for row in csv.DictReader(f):
-                    _curation_start_rows[row["dataset_id"]] = row
-        except FileNotFoundError:
-            pass
-
-    return _curation_start_rows.get(dataset_id)
+    return _start_rows(_curation_start_source()).get(dataset_id)
 
 
 def true_submission_date(dataset_id):
     row = _curation_start_row(dataset_id)
-    return parse_date(row.get("true_submission_date")) if row else None
+    if not row:
+        return None
+
+    verified = parse_date(row.get("true_submission_date"))
+    publication = parse_date(row.get("publication_date"))
+
+    # if the verified submission->publication span is still under a day, fall back to
+    # the original computed submission date
+    if verified is not None and publication is not None and publication - verified < datetime.timedelta(days=1):
+        computed = _start_rows(COMPUTED_CURATION_START).get(dataset_id)
+        if computed:
+            fallback = parse_date(computed.get("true_submission_date"))
+            if fallback is not None:
+                return fallback
+
+    return verified
+
+
+FIRST_PUBLISHED_CACHE = "./pennsieve_first_published.csv"
+_first_published = None
+
+
+def _load_first_published():
+    global _first_published
+    if _first_published is None:
+        _first_published = {}
+        try:
+            with open(FIRST_PUBLISHED_CACHE, encoding="utf-8-sig") as f:
+                for row in csv.DictReader(f):
+                    _first_published[row["dataset_id"]] = row.get("publication_date") or ""
+        except FileNotFoundError:
+            pass
+    return _first_published
+
+
+def _cache_first_published(dataset_id, dt):
+    cache = _load_first_published()
+    iso = dt.isoformat() if dt else ""
+    cache[dataset_id] = iso
+    write_header = not os.path.exists(FIRST_PUBLISHED_CACHE)
+    with open(FIRST_PUBLISHED_CACHE, "a", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(["dataset_id", "publication_date"])
+        writer.writerow([dataset_id, iso])
 
 
 def true_publication_date(dataset_id):
-    row = _curation_start_row(dataset_id)
-    return parse_date(row.get("publication_date")) if row else None
+    cache = _load_first_published()
+    if dataset_id in cache:
+        return parse_iso8601(cache[dataset_id]) if cache[dataset_id] else None
+
+    import requests
+    res = requests.get(f"https://api.pennsieve.io/discover/datasets/{PENNSIEVE_DATASET_MAP[dataset_id]}/versions")
+    print(res)
+    if res.status_code == 200:
+        dt = parse_date(res.json()[-1]["firstPublishedAt"])
+    else:
+        print("Failed to fetch publication date from Pennsieve API for dataset_id:", dataset_id)
+        row = _curation_start_row(dataset_id)
+        dt = parse_date(row.get("publication_date")) if row else None
+
+    _cache_first_published(dataset_id, dt)
+    return dt
 
 
 RECONCILIATION_SOURCE = "./SPARC_pipeline_published_reconciliation.csv"
 _reconciliation_rows = None
-
 
 def _reconciliation_row(dataset_id):
     # keyed by node_id; header keys stripped (the source has a trailing space on "scaffold ")
@@ -301,10 +360,13 @@ with open("./error-info.json") as _ef:
     _error_info = {entry["id"]: (entry["description"], entry["format"]) for entry in json.load(_ef)}
 
 
+EXCLUDED_PATH_PREFIXES = ("#/inputs/", "#/specimen_dirs", "#/entity_dirs")
+
+
 def is_excluded_error_type(error_type):
-    # Exclusion is driven entirely by the error map's Excluded? column: resolve the
-    # stored key to its canonical map #, then check that # against EXCLUDED_IDS.
-    # Unresolved keys (id == "") are never excluded.
+    # Excluded if the error path excluded or error map marks Excluded?
+    if error_type.split(":", 1)[0].startswith(EXCLUDED_PATH_PREFIXES):
+        return True
     return get_error_id(error_type) in EXCLUDED_IDS
 
 
@@ -335,7 +397,13 @@ def drop_excluded_error_types(error_types):
 
 def last_error_count_at_or_before(target_ts, error_graph):
     c = last_error_types_at_or_before(target_ts, error_graph)
-    return sum(c.values()) if c else 0
+    if c is None:
+        return 0
+    for k, _ in c:
+        if is_excluded_error_type(k):
+            del c[k]
+    return len(c)
+    #return sum(c.values()) if c else 0
 
 
 def _nearest_non_failed_index(items, pos):
@@ -419,7 +487,7 @@ def _positive_error_counts(errors):
 
 
 def error_types_near(target_ts, error_graph):
-    """Error types at the export nearest `target_ts`: prefer the latest export
+    """Error types at the export nearest `target_ts`; prefer the latest export
     at or before it; if the target predates all exports, use the earliest one."""
     items = sorted(((int(ts_str), errors) for ts_str, errors in error_graph.items()), key=lambda item: item[0])
 
@@ -442,9 +510,7 @@ def error_types_near(target_ts, error_graph):
 
 
 def effective_after_event(dataset_record, event_dt):
-    """True if no curation export has an 'updated' timestamp at or before event_dt
-    -- the nearest export postdates the event, so its snapshot can't represent the
-    state then. No exports or a None event count as "after"."""
+    """True if no curation export has an 'updated' timestamp at or before event_dt"""
     if event_dt is None:
         return True
 
@@ -483,12 +549,14 @@ def _effective_export_pairs(dataset_record):
 
 
 def nearest_export_key_effective(dataset_record, event_ts):
+    # last export whose effective ts is at or before the event (matches the matrix's
+    # nearest_index; among equal effective ts, keep the latest export)
     pairs = _effective_export_pairs(dataset_record)
-    
+
     if not pairs:
         return None
+
     pos = None
-    
     for i, (eff, _) in enumerate(pairs):
         if eff <= event_ts:
             pos = i
@@ -496,11 +564,13 @@ def nearest_export_key_effective(dataset_record, event_ts):
             break
     if pos is None:
         pos = 0
-    else:
-        while pos > 0 and pairs[pos - 1][0] == pairs[pos][0]:
-            pos -= 1
-            
+
     return str(pairs[pos][1])
+
+
+def effective_export_ts_by_key(dataset_record):
+    # effective (updated) export timestamp keyed by str(export unix_timestamp)
+    return {str(start): eff for eff, start in _effective_export_pairs(dataset_record)}
 
 
 def error_types_near_effective(dataset_record, event_dt):
@@ -513,3 +583,20 @@ def error_types_near_effective(dataset_record, event_dt):
         return None
     
     return _positive_error_counts((dataset_record.get("error_graph") or {}).get(key))
+
+
+# + exclude /inputs
+# + exclude entity_dirs/ and specimen_dirs/
+# graph most common at submission but NOT at publication AFTER filtering
+# remove 2018, 2019 from time sub to pub
+# change plotly to not exclude outliers
+    # add mean and standard deviation to sub to pub graph (annotations)
+# perhaps sub to pub using the quarters? as a test
+# perhaps sub to pub using a SEM graph? with the range being within 4 std-dev? as a test
+# perhaps sub to pub using 95th percentile only?
+    # put it on the original graph as an annotation?
+    # and/or a whole other graph?
+# sub to pub binned by publication year as a separate graph for comparison
+# bin category mix by publication year as a separate graph for comparison
+# also improve the names of each graph in curation_report.py
+# + need to report the < 1 day sub->pubs again
