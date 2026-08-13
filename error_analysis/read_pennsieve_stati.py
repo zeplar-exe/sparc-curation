@@ -11,13 +11,13 @@ with open(IN, "r", encoding="utf-8") as f:
 all_events = defaultdict(list)
 
 relevant_users = [
-    # 589, # Tom 
+    589, # Tom
     832, # Anka
     1554, # Anka alt unused
     1186, # Marlena
     # 531, # Anita
     # 600, # Jeff
-    # 601, # Jeff (ncmir)
+    601, # Jeff (ncmir)
     # 611, # Maryann
 ]
 
@@ -47,6 +47,7 @@ for dataset_id, events in all_events.items():
         sequences[dataset_id].append(collected)
 
 target_stati = [
+    4, # 03
     5, # 04_CURATION_IN_PROGRESS_CURATORS
     6, # 05_CURATION_IN_PROGRESS_MBF_CURATORS
     7, # 06_MBF_CURATION_COMPLETE_CURATORS

@@ -13,20 +13,39 @@ USE_ERROR_INDEX_GRAPH = False
 SPARC_ORGANIZATION = "organization:618e8dd9-f8d2-4dc4-9abb-c6aaab2e78a0"
 
 EXCLUDED_DATASET_IDS = []
+ERROR_EXCLUDED_DATASET_IDS = []
 WHITELIST_DATASET_IDS = []
 INCLUDED_ERROR_FORMATS = []
 ERROR_DICTIONARY = []
 PENNSIEVE_DATASET_MAP = {}
 
+FIRST_PUBLISHED_CACHE = "./pennsieve_first_published.csv"
+_first_published = None
+RECONCILIATION_SOURCE = "./SPARC_pipeline_published_reconciliation.csv"
+_reconciliation_rows = None
+
+EXCLUDED_PATH_PREFIXES = ("#/inputs", "#/specimen_dirs", "#/entity_dirs", "#/meta/techniques", "#/code_description") # for graphs
+
+# old exclusion file (REVA datasets) is still applied before the ground truth
 with open("./dataset_exclusion_list.csv") as f:
     for row in csv.DictReader(f):
         EXCLUDED_DATASET_IDS.append(row["Dataset ID"])
 
 with open("./big-did.json") as f:
     for did, entry in json.load(f).items():
-        if entry["id_organization"] == SPARC_ORGANIZATION:
-            WHITELIST_DATASET_IDS.append(did)
         PENNSIEVE_DATASET_MAP[did] = entry["id_published"]
+
+# inclusion ground truth; the pipeline dataset list, keeping only SPARC and dropping sample/test
+with open("./all_datasets_pipeline.csv", encoding="utf-8-sig") as f:
+    for raw in csv.DictReader(f):
+        row = {(key or "").strip(): value for key, value in raw.items()}
+        if (row.get("organization") or "").strip() != "SPARC":
+            continue
+        if (row.get("test dataset exclude") or "").lower() == "sample/test":
+            continue
+        #if (row.get("status") or "").lower() != "completed":
+        #    continue
+        WHITELIST_DATASET_IDS.append(row["node_id"].strip())
 
 with open("./SPARC_error_map.csv") as f:
     for row in csv.DictReader(f):
@@ -145,14 +164,19 @@ def get_error_id(error_type):
 
 
 def get_canonical_title(error_type):
-    """Canonical error-map Error Title for a stored key (falls back to raw title)."""
+    """Canonical error-map Error Title for a stored key; falls back to the raw
+    description (tag kept) when unmapped."""
     signature = _tag_signature(error_type)
 
     if signature is not None and signature in TAG_TO_CANON:
         return TAG_TO_CANON[signature]
 
     title = _title_of(error_type)
-    return TITLE_TO_CANON.get(title, title)
+    if title in TITLE_TO_CANON:
+        return TITLE_TO_CANON[title]
+
+    # unmapped: keep the full description including any tag
+    return error_type.split(":", 1)[1].strip() if ":" in error_type else error_type
 
 
 def normalize_dataset_id(dataset_id):
@@ -258,11 +282,6 @@ def true_submission_date(dataset_id):
 
     return verified
 
-
-FIRST_PUBLISHED_CACHE = "./pennsieve_first_published.csv"
-_first_published = None
-
-
 def _load_first_published():
     global _first_published
     if _first_published is None:
@@ -293,22 +312,23 @@ def true_publication_date(dataset_id):
     if dataset_id in cache:
         return parse_iso8601(cache[dataset_id]) if cache[dataset_id] else None
 
-    import requests
-    res = requests.get(f"https://api.pennsieve.io/discover/datasets/{PENNSIEVE_DATASET_MAP[dataset_id]}/versions")
-    print(res)
-    if res.status_code == 200:
-        dt = parse_date(res.json()[-1]["firstPublishedAt"])
-    else:
-        print("Failed to fetch publication date from Pennsieve API for dataset_id:", dataset_id)
+    dt = None
+    published_id = PENNSIEVE_DATASET_MAP.get(dataset_id)
+    if published_id is not None:
+        import requests
+        res = requests.get(f"https://api.pennsieve.io/discover/datasets/{published_id}/versions")
+        if res.status_code == 200:
+            dt = parse_date(res.json()[-1]["firstPublishedAt"])
+        else:
+            print("Failed to fetch publication date from Pennsieve API for dataset_id:", dataset_id)
+
+    # not in the published map, or the API had nothing: fall back to the A7/computed row
+    if dt is None:
         row = _curation_start_row(dataset_id)
         dt = parse_date(row.get("publication_date")) if row else None
 
     _cache_first_published(dataset_id, dt)
     return dt
-
-
-RECONCILIATION_SOURCE = "./SPARC_pipeline_published_reconciliation.csv"
-_reconciliation_rows = None
 
 def _reconciliation_row(dataset_id):
     # keyed by node_id; header keys stripped (the source has a trailing space on "scaffold ")
@@ -358,9 +378,6 @@ def reconciliation_publication_year(dataset_id):
 
 with open("./error-info.json") as _ef:
     _error_info = {entry["id"]: (entry["description"], entry["format"]) for entry in json.load(_ef)}
-
-
-EXCLUDED_PATH_PREFIXES = ("#/inputs/", "#/specimen_dirs", "#/entity_dirs")
 
 
 def is_excluded_error_type(error_type):
@@ -587,16 +604,16 @@ def error_types_near_effective(dataset_record, event_dt):
 
 # + exclude /inputs
 # + exclude entity_dirs/ and specimen_dirs/
-# graph most common at submission but NOT at publication AFTER filtering
-# remove 2018, 2019 from time sub to pub
-# change plotly to not exclude outliers
-    # add mean and standard deviation to sub to pub graph (annotations)
-# perhaps sub to pub using the quarters? as a test
-# perhaps sub to pub using a SEM graph? with the range being within 4 std-dev? as a test
-# perhaps sub to pub using 95th percentile only?
-    # put it on the original graph as an annotation?
-    # and/or a whole other graph?
-# sub to pub binned by publication year as a separate graph for comparison
-# bin category mix by publication year as a separate graph for comparison
-# also improve the names of each graph in curation_report.py
+# + graph most common at submission but NOT at publication AFTER filtering
+# + remove 2018, 2019 from time sub to pub
+# / change plotly to not exclude outliers
+    # + add mean and standard deviation to sub to pub graph (annotations)
+# + perhaps sub to pub using the quarters? as a test
+# + perhaps sub to pub using a SEM graph? with the range being within 4 std-dev? as a test
+# + perhaps sub to pub using 95th percentile only?
+    # + put it on the original graph as an annotation?
+    # + and/or a whole other graph?
+# + sub to pub binned by publication year as a separate graph for comparison
+# + bin category mix by publication year as a separate graph for comparison
+# + also improve the names of each graph in curation_report.py
 # + need to report the < 1 day sub->pubs again

@@ -23,6 +23,7 @@ from report_common import (
     parse_mmddyyyy,
     fiscal_year,
     is_excluded_error_type,
+    get_canonical_title,
     drop_excluded_error_types,
     last_error_count_at_or_before,
     last_error_index_at_or_before,
@@ -33,14 +34,25 @@ from report_common import (
     nearest_export_key_effective,
     effective_after_event,
 )
+from categorize_curator_events import EVENT_MAP
 
 # file-wide plotly styling: bigger fonts on every figure
 pio.templates["report"] = go.layout.Template(
     layout=dict(
-        font=dict(size=18),
+        font=dict(size=18, color="black"),
         title=dict(font=dict(size=24)),
         legend=dict(font=dict(size=16)),
-    )
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(gridcolor="lightgray", zerolinecolor="lightgray", linecolor="black", showline=True, ticks="outside", tickcolor="black"),
+        yaxis=dict(gridcolor="lightgray", zerolinecolor="lightgray", linecolor="black", showline=True, ticks="outside", tickcolor="black"),
+    ),
+    data=dict(
+        # box plots: no fill, black outline; scatters/histograms default to black
+        box=[go.Box(fillcolor="rgba(0,0,0,0)", line=dict(color="black"), marker=dict(color="black"))],
+        scatter=[go.Scatter(marker=dict(color="black"))],
+        histogram=[go.Histogram(marker=dict(color="black"))],
+    ),
 )
 pio.templates.default = "plotly+report"
 
@@ -53,13 +65,13 @@ CURATION_CLUSTERS = "./pennsieve_curation_clusters.json"
 CURATOR_CATEGORIES = "./curator_event_categories.json"
 
 CURATOR_IDS = {
-    # 589, 
+    589, 
     832, 
     1554, 
     1186, 
     #531, 
     # 600, 
-    # 601, 
+    601, 
     #611
 }
 
@@ -92,6 +104,11 @@ def format_datetime(value):
     return str(value)
 
 
+def error_label(error_type):
+    # human-readable label for error-type figures: canonical title, path kept as a prefix
+    return f"{error_type.split(':', 1)[0]}: {get_canonical_title(error_type)}"
+
+
 def first_publication_date(dataset_id, event_sequences):
     # prefer the hand-verified A7 publication date; fall back to the first cycle's accept
     true_pub = true_publication_date(dataset_id)
@@ -106,6 +123,12 @@ def first_publication_date(dataset_id, event_sequences):
 def publication_dates(dataset_id, event_sequences):
     events = event_sequences.get(dataset_id) or []
     dates = [parse_iso8601(event.get("accept_created")) for event in events]
+    return sorted(date for date in dates if date)
+
+
+def submission_dates(dataset_id, event_sequences):
+    events = event_sequences.get(dataset_id) or []
+    dates = [parse_iso8601(event.get("request_created")) for event in events]
     return sorted(date for date in dates if date)
 
 
@@ -156,6 +179,15 @@ def distinct_errors_at(dataset_record, event_dt):
     return len(types) if types else 0
 
 
+def export_failed_at(dataset_record, event_dt):
+    # True if the export nearest the event failed completely (error_index 9999),
+    # so its error count is unknown rather than zero
+    if event_dt is None:
+        return True
+    key = nearest_export_key_effective(dataset_record, int(event_dt.timestamp()))
+    return (dataset_record.get("error_index_graph") or {}).get(key) == 9999
+
+
 def graph_excluded(dataset_id, dataset_record, event_sequences):
     """Drop a dataset from the error graphs when its submission or publication is
     missing / before the 2022-04 window, or it's a computational scaffold."""
@@ -180,6 +212,14 @@ def graph_excluded(dataset_id, dataset_record, event_sequences):
     if is_excluded_computational(dataset_id):
         return True
 
+    # exclude if EITHER the submission or publication export failed (needs the record;
+    # None-record callers, e.g. the curation-cluster graphs, skip this)
+    if dataset_record is not None:
+        if export_failed_at(dataset_record, submission):
+            return True
+        if publication is not None and export_failed_at(dataset_record, publication):
+            return True
+
     return False
 
 
@@ -189,6 +229,11 @@ def sub_to_pub_records(event_sequences, min_year=2020):
 
     for dataset_id in event_sequences:
         if is_excluded_dataset(dataset_id) or is_excluded_computational(dataset_id):
+            continue
+
+        # reconciliation pub_year before 2022 means an earlier hidden cycle -> misleading duration
+        recon_year = reconciliation_publication_year(dataset_id)
+        if recon_year is not None and recon_year < 2022:
             continue
 
         req = first_request_date(dataset_id, event_sequences, floor=False)
@@ -221,6 +266,29 @@ def rolling_mean_sem(df, date_col, window="90D"):
         "sem": (roll.std() / np.sqrt(roll.count())).values,
         "count": roll.count().values,
     })
+
+
+def rolling_mean_std(df, date_col, value_col, window="90D"):
+    # rolling mean and standard deviation of value_col over a continuous date axis
+    series = df[[date_col, value_col]].dropna().sort_values(date_col).set_index(date_col)[value_col]
+    roll = series.rolling(window)
+    return pd.DataFrame({
+        "date": series.index,
+        "mean": roll.mean().values,
+        "std": roll.std().values,
+    })
+
+
+def overlay_rolling(fig, df, date_col, value_col, window_days=180):
+    # add a rolling-average line + transparent ±1 SD band (call after the scatter dots)
+    roll = rolling_mean_std(df, date_col, value_col, window=f"{window_days}D")
+    fig.add_trace(go.Scatter(x=roll["date"], y=roll["mean"] + roll["std"], mode="lines",
+                             line=dict(width=0), showlegend=False, hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=roll["date"], y=roll["mean"] - roll["std"], mode="lines",
+                             line=dict(width=0), fill="tonexty", fillcolor="rgba(0,0,0,0.12)",
+                             name="±1 SD", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=roll["date"], y=roll["mean"], mode="lines",
+                             line=dict(color="black", width=2), name=f"Rolling average ({window_days}-day window)", hoverinfo="skip"))
 
 
 def plot_rolling_mean_sem(roll, title, x_label):
@@ -270,6 +338,7 @@ def plot_error_types_by_year(records, title, normalize=False):
         return
 
     df = pd.DataFrame(records)
+    df["type"] = df["type"].map(error_label)  # canonical title, path kept as prefix
     # count = number of distinct datasets that have each error type per year
     if "dataset_id" in df.columns:
         df = df.groupby(["year", "type"])["dataset_id"].nunique().reset_index(name="count")
@@ -313,6 +382,7 @@ def plot_removed_errors_by_year(records, title):
         return
 
     df = pd.DataFrame(records)
+    df["type"] = df["type"].map(error_label)  # canonical title, path kept as prefix
     df = df.groupby(["year", "type"])["count"].sum().reset_index()
 
     # compute per-year totals for percentage normalization
@@ -355,7 +425,30 @@ def curation_session_timespan_hours(cluster):
     if not start or not end or end < start:
         return None
 
-    return (end - start).total_seconds() / 3600
+    # every curation session counts for at least an hour; nevermind, going back to none
+    return max((end - start).total_seconds() / 3600, 0)
+
+
+def cluster_in_first_cycle(cluster, submission, publication):
+    # True if the cluster starts within the first publication cycle [submission, publication]
+    start = parse_iso8601(cluster.get("start"))
+    if start is None:
+        return False
+    if submission is not None and start < submission:
+        return False
+    if publication is not None and start > publication:
+        return False
+    return True
+
+
+def first_cycle_clusters(dataset_sequences, submission, publication):
+    # flattened clusters within the first publication cycle [submission, publication]
+    return [
+        cluster
+        for sequence in dataset_sequences
+        for cluster in sequence.get("clusters", [])
+        if cluster_in_first_cycle(cluster, submission, publication)
+    ]
 
 
 def cluster_stats(temporal_report, curation_clusters, event_sequences):
@@ -374,14 +467,10 @@ def cluster_stats(temporal_report, curation_clusters, event_sequences):
         publication = first_publication_date(dataset_id, event_sequences)
 
         hours = []
-        for sequence in sequences:
-            for cluster in sequence.get("clusters", []):
-                start = parse_iso8601(cluster.get("start"))
-                if publication is not None and start is not None and start > publication:
-                    continue
-                span = curation_session_timespan_hours(cluster)
-                if span is not None and span >= 1e-3:
-                    hours.append(span)
+        for cluster in first_cycle_clusters(sequences, submission, publication):
+            span = curation_session_timespan_hours(cluster)
+            if span is not None and span >= 1e-3:
+                hours.append(span)
 
         if not hours:
             continue
@@ -427,6 +516,10 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             if not submission or not publication:
                 continue
 
+            # a failed export (error_index 9999) has an unknown count, not zero -> skip
+            if export_failed_at(dataset_record, submission) or export_failed_at(dataset_record, publication):
+                continue
+
             org = (
                 "precision" if dataset_record.get("is_precision") else
                 "sparc" if dataset_record.get("is_sparc") else
@@ -450,52 +543,51 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             })
 
         for soda_val, soda_label in [(True, "SODA"), (False, "non-SODA")]:
-            for org in ["sparc"]:
-                filtered = [r for r in records if r["uses_soda"] == soda_val and r["org"] == org]
-                
-                if not filtered:
+            filtered = [r for r in records if r["uses_soda"] == soda_val]
+
+            if not filtered:
+                continue
+
+            x_vals = [r["request_time"] for r in filtered]
+            y_vals = [r["error_diff"] for r in filtered]
+            y_absmax = max(abs(min(y_vals)), abs(max(y_vals)))
+            y_buffer = max(1, y_absmax * 0.05)
+            hover_text = [
+                f"Dataset ID: {r['dataset_id']}<br>Submission Date: {format_datetime(r['request_time'])}<br>Publication Date: {format_datetime(r['publish_time'])}<br>Diff: {r['error_diff']}<br>At Submission: {r.get('req_error_count', 'N/A')}<br>At Publish: {r.get('pub_error_count', 'N/A')}"
+                for r in filtered
+            ]
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=x_vals,
+                y=y_vals,
+                mode="markers",
+                marker=dict(color="black", size=10, opacity=0.5),
+                name=f"{soda_label} ({len(filtered)})",
+                text=hover_text,
+                hoverinfo="text",
+            ))
+
+            min_x = min(x_vals)
+
+            for update in sparcur_updates:
+                update_date = parse_mmddyyyy(update["date"])
+
+                if not update_date:
                     continue
-                
-                x_vals = [r["request_time"] for r in filtered]
-                y_vals = [r["error_diff"] for r in filtered]
-                y_absmax = max(abs(min(y_vals)), abs(max(y_vals)))
-                y_buffer = max(1, y_absmax * 0.05)
-                hover_text = [
-                    f"Dataset ID: {r['dataset_id']}<br>Submission Date: {format_datetime(r['request_time'])}<br>Publication Date: {format_datetime(r['publish_time'])}<br>Diff: {r['error_diff']}<br>At Submission: {r.get('req_error_count', 'N/A')}<br>At Publish: {r.get('pub_error_count', 'N/A')}"
-                    for r in filtered
-                ]
+                if min_x.tzinfo is not None and update_date.tzinfo is None:
+                    update_date = update_date.replace(tzinfo=min_x.tzinfo)
+                elif min_x.tzinfo is None and update_date.tzinfo is not None:
+                    min_x = min_x.replace(tzinfo=update_date.tzinfo)
+                if update_date >= min_x:
+                    fig.add_vline(x=update_date, line=dict(color="red", dash="dash"), opacity=0.7)
+                    fig.add_annotation(x=update_date, y=1, yref="paper", text=update["version"], showarrow=False)
 
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=x_vals,
-                    y=y_vals,
-                    mode="markers",
-                    marker=dict(color=colors.get(org, "gray"), size=10, opacity=0.7),
-                    name=f"{soda_label} {org} ({len(filtered)})",
-                    text=hover_text,
-                    hoverinfo="text",
-                ))
-                
-                min_x = min(x_vals)
-                
-                for update in sparcur_updates:
-                    update_date = parse_mmddyyyy(update["date"])
-                    
-                    if not update_date:
-                        continue
-                    if min_x.tzinfo is not None and update_date.tzinfo is None:
-                        update_date = update_date.replace(tzinfo=min_x.tzinfo)
-                    elif min_x.tzinfo is None and update_date.tzinfo is not None:
-                        min_x = min_x.replace(tzinfo=update_date.tzinfo)
-                    if update_date >= min_x:
-                        fig.add_vline(x=update_date, line=dict(color="red", dash="dash"), opacity=0.7)
-                        fig.add_annotation(x=update_date, y=1, yref="paper", text=update["version"], showarrow=False)
-
-                fig.add_hline(y=0, line=dict(color="gray", dash="dash"), opacity=0.5)
-                fig.update_yaxes(range=[-y_absmax - y_buffer, y_absmax + y_buffer], title=f"{source_label} Difference (Publication - Submission)")
-                fig.update_xaxes(title="Submission Date")
-                fig.update_layout(title=f"Standards Adherence: {source_label} Difference (Publication - Submission)<br>{soda_label} {org}")
-                fig.show()
+            fig.add_hline(y=0, line=dict(color="gray", dash="dash"), opacity=0.5)
+            fig.update_yaxes(range=[-y_absmax - y_buffer, y_absmax + y_buffer], title=f"{source_label} Difference (Publication - Submission)")
+            fig.update_xaxes(title="Submission Date")
+            fig.update_layout(title=f"Standards Adherence: {source_label} Difference (Publication - Submission)<br>{soda_label}")
+            fig.show()
 
     def metric_1b_error_types(temporal_report, event_sequences):
         first_request_error_type_records = []
@@ -788,17 +880,26 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
     def metric_4_total_curation_events(temporal_report, event_sequences, status_delimited_sequences):
         curation_event_records = []
         for dataset_id, dataset_record in temporal_report.items():
-            if is_excluded_dataset(dataset_id):
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, None, event_sequences):
                 continue
-            
+
             first_request = first_request_date(dataset_id, event_sequences)
-            
+
             if not first_request:
                 continue
-            
+
             publication_date = first_publication_date(dataset_id, event_sequences)
             dataset_sequences = status_delimited_sequences.get(dataset_id, [])
-            total_curation_events = sum(len(sequence) for sequence in dataset_sequences)
+            # first publication cycle only: events within [submission, publication]
+            total_curation_events = 0
+            for sequence in dataset_sequences:
+                for event in sequence:
+                    created = parse_iso8601(event.get("createdAt"))
+                    if created is None or created < first_request:
+                        continue
+                    if publication_date is not None and created > publication_date:
+                        continue
+                    total_curation_events += 1
             curation_event_records.append({"dataset_id": dataset_id, "first_request_year": fiscal_year(first_request), "publication_date": publication_date, "total_curation_events": total_curation_events})
         if curation_event_records:
             fig = px.box(pd.DataFrame(curation_event_records), x="first_request_year", y="total_curation_events", hover_data=["dataset_id", "publication_date"], points="all", title="Total Curation Changes per Dataset by Submission Year", labels={"first_request_year": "Submission Year", "total_curation_events": "Total Curation Changes", "dataset_id": "Dataset ID", "publication_date": "Publication Date"})
@@ -808,25 +909,24 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
     def metric_4b_session_timespans(curation_clusters, event_sequences):
         curation_session_timespan_records = []
         for dataset_id, dataset_sequences in curation_clusters.items():
-            if is_excluded_dataset(dataset_id):
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, None, event_sequences):
                 continue
             first_request = first_request_date(dataset_id, event_sequences)
             if not first_request:
                 continue
             publication_date = first_publication_date(dataset_id, event_sequences)
-            for sequence in dataset_sequences:
-                for cluster in sequence.get("clusters", []):
-                    session_timespan_hours = curation_session_timespan_hours(cluster)
-                    if session_timespan_hours is None:
-                        continue
-                    curation_session_timespan_records.append({
-                        "dataset_id": dataset_id,
-                        "first_request_year": fiscal_year(first_request),
-                        "publication_date": publication_date,
-                        "session_timespan_hours": session_timespan_hours,
-                        "session_start": parse_iso8601(cluster.get("start")),
-                        "session_end": parse_iso8601(cluster.get("end")),
-                    })
+            for cluster in first_cycle_clusters(dataset_sequences, first_request, publication_date):
+                session_timespan_hours = curation_session_timespan_hours(cluster)
+                if session_timespan_hours is None:
+                    continue
+                curation_session_timespan_records.append({
+                    "dataset_id": dataset_id,
+                    "first_request_year": fiscal_year(first_request),
+                    "publication_date": publication_date,
+                    "session_timespan_hours": session_timespan_hours,
+                    "session_start": parse_iso8601(cluster.get("start")),
+                    "session_end": parse_iso8601(cluster.get("end")),
+                })
                     
         if curation_session_timespan_records:
             df = pd.DataFrame(curation_session_timespan_records)
@@ -892,15 +992,10 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
 
             total_hours = 0
 
-            for sequence in dataset_sequences:
-                for cluster in sequence.get("clusters", []):
-                    # first publication cycle only: skip curation sessions after the first publication
-                    cluster_start = parse_iso8601(cluster.get("start"))
-                    if publication_date is not None and cluster_start is not None and cluster_start > publication_date:
-                        continue
-                    session_timespan_hours = max(curation_session_timespan_hours(cluster), 1)
-                    if session_timespan_hours is not None and session_timespan_hours >= 1e-3:
-                        total_hours += session_timespan_hours
+            for cluster in first_cycle_clusters(dataset_sequences, first_request, publication_date):
+                session_timespan_hours = curation_session_timespan_hours(cluster)
+                if session_timespan_hours is not None:
+                    total_hours += session_timespan_hours
             
             total_time_records.append({
                 "dataset_id": dataset_id,
@@ -913,57 +1008,99 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         if total_time_records:
             df = pd.DataFrame(total_time_records)
             fig = go.Figure()
+
+            window_days = 180
+            roll = rolling_mean_std(df, "first_request_date", "total_curation_hours", window=f"{window_days}D")
+            fig.add_trace(go.Scatter(x=roll["date"], y=roll["mean"] + roll["std"], mode="lines",
+                                     line=dict(width=0), showlegend=False, hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=roll["date"], y=roll["mean"] - roll["std"], mode="lines",
+                                     line=dict(width=0), fill="tonexty", fillcolor="rgba(128,0,128,0.15)",
+                                     name="±1 SD", hoverinfo="skip"))
+
             first_request_dates = [record["first_request_date"] for record in total_time_records]
             total_hours_list = [record["total_curation_hours"] for record in total_time_records]
             fig.add_trace(go.Scatter(
                 x=first_request_dates,
                 y=total_hours_list,
                 mode="markers",
-                marker=dict(size=10, opacity=0.75, color="purple"),
+                marker=dict(size=10, opacity=0.5, color="purple"),
                 text=[f"Dataset ID: {record['dataset_id']}<br>Submission Date: {format_datetime(record['first_request_date'])}<br>Publication Date: {format_datetime(record.get('publication_date'))}<br>Total Curation Time: {record['total_curation_hours']:.2f} hours" for record in total_time_records],
                 hoverinfo="text",
                 name="Datasets",
             ))
-            
-            if len(total_time_records) >= 2:
-                x_numeric = np.array(mdates.date2num(first_request_dates), dtype=float)
-                y_numeric = np.array(total_hours_list, dtype=float)
-                slope, intercept = np.polyfit(x_numeric, y_numeric, 1)
-                x_line = np.linspace(x_numeric.min(), x_numeric.max(), 100)
-                y_line = slope * x_line + intercept
-                fig.add_trace(go.Scatter(
-                    x=mdates.num2date(x_line),
-                    y=y_line,
-                    mode="lines",
-                    line=dict(color="black", width=2),
-                    name="Trend line",
-                    hoverinfo="skip",
-                ))
-            
+
+            fig.add_trace(go.Scatter(x=roll["date"], y=roll["mean"], mode="lines",
+                                     line=dict(color="black", width=2), name=f"Rolling average ({window_days}-day window)", hoverinfo="skip"))
+
             fig.update_xaxes(title="Submission Date", type="date")
             fig.update_yaxes(title="Total Curation Time (Hours)")
             fig.update_layout(title="Total Time Spent Curating per Dataset by Submission Date")
             fig.show()
 
+    def metric_4f_curation_touch_days(curation_clusters, event_sequences):
+        records = []
+        for dataset_id, dataset_sequences in curation_clusters.items():
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, None, event_sequences):
+                continue
+
+            first_request = first_request_date(dataset_id, event_sequences)
+            publication_date = first_publication_date(dataset_id, event_sequences)
+
+            if not first_request or not publication_date or publication_date <= first_request:
+                continue
+
+            days = set()
+            for cluster in first_cycle_clusters(dataset_sequences, first_request, publication_date):
+                start = parse_iso8601(cluster.get("start"))
+                # every calendar date the cluster spans (start .. end inclusive)
+                end = parse_iso8601(cluster.get("end"))
+                last = end if (end is not None and end >= start) else start
+                day = start.date()
+                while day <= last.date():
+                    days.add(day)
+                    day += datetime.timedelta(days=1)
+
+            days_to_pub = (publication_date - first_request).days
+            if not days or days_to_pub <= 0:
+                continue
+
+            records.append({
+                "dataset_id": dataset_id,
+                "touch_ratio": len(days) / days_to_pub,
+            })
+
+        if not records:
+            return
+
+        df = pd.DataFrame(records)
+        fig = px.histogram(
+            df, x="touch_ratio",
+            title="Fraction of Submission-to-Publication Days with a Curation Touch",
+            labels={"touch_ratio": "Curation-Touch Days / Days from Submission to Publication"},
+        )
+        fig.update_layout(yaxis_title="Number of Datasets")
+        fig.show()
+
     def metric_4d_gaps_between_sessions(curation_clusters, event_sequences):
         gap_records = []
         for dataset_id, dataset_sequences in curation_clusters.items():
-            if is_excluded_dataset(dataset_id):
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, None, event_sequences):
                 continue
             first_request = first_request_date(dataset_id, event_sequences)
             if not first_request:
                 continue
             publication_date = first_publication_date(dataset_id, event_sequences)
-            
+
             for sequence in dataset_sequences:
-                clusters = sequence.get("clusters", [])
+                # first publication cycle only: gaps between consecutive in-window sessions
+                clusters = [c for c in sequence.get("clusters", []) if cluster_in_first_cycle(c, first_request, publication_date)]
                 for i in range(len(clusters) - 1):
                     current_cluster = clusters[i]
                     next_cluster = clusters[i + 1]
-                    
+
                     current_end = parse_iso8601(current_cluster.get("end"))
                     next_start = parse_iso8601(next_cluster.get("start"))
-                    
+
                     if current_end and next_start and next_start > current_end:
                         gap_hours = (next_start - current_end).total_seconds() / 3600
                         gap_records.append({
@@ -1015,17 +1152,18 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
     def metric_4e_total_gaps_per_dataset(curation_clusters, event_sequences):
         total_gaps_records = []
         for dataset_id, dataset_sequences in curation_clusters.items():
-            if is_excluded_dataset(dataset_id):
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, None, event_sequences):
                 continue
             first_request = first_request_date(dataset_id, event_sequences)
             if not first_request:
                 continue
             publication_date = first_publication_date(dataset_id, event_sequences)
-            
+
             total_gap_hours = 0
             gap_count = 0
             for sequence in dataset_sequences:
-                clusters = sequence.get("clusters", [])
+                # first publication cycle only: gaps between consecutive in-window sessions
+                clusters = [c for c in sequence.get("clusters", []) if cluster_in_first_cycle(c, first_request, publication_date)]
                 for i in range(len(clusters) - 1):
                     current_cluster = clusters[i]
                     next_cluster = clusters[i + 1]
@@ -1085,40 +1223,31 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
     def metric_5_datasets_vs_sessions(curation_clusters, event_sequences):
         cluster_records = []
         for dataset_id, dataset_sequences in curation_clusters.items():
-            if is_excluded_dataset(dataset_id):
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, None, event_sequences):
                 continue
-            
+
             first_request = first_request_date(dataset_id, event_sequences)
-            
+
             if not first_request:
                 continue
-            
+
             publication_date = first_publication_date(dataset_id, event_sequences)
-            cluster_total = 0
-            
-            for sequence in dataset_sequences:
-                cluster_total += sequence.get("cluster_count", sequence.get("length", 0))
-                
+            cluster_total = len(first_cycle_clusters(dataset_sequences, first_request, publication_date))
+
             cluster_records.append({
-                "dataset_id": dataset_id, 
-                "first_request_date": first_request, 
-                "first_request_year": fiscal_year(first_request), 
-                "publication_date": publication_date, 
-                "total_clusters": cluster_total, 
+                "dataset_id": dataset_id,
+                "first_request_date": first_request,
+                "first_request_year": fiscal_year(first_request),
+                "publication_date": publication_date,
+                "total_clusters": cluster_total,
                 "sequence_count": len(dataset_sequences)
             })
         if cluster_records:
             fig = go.Figure()
             first_request_dates = [record["first_request_date"] for record in cluster_records]
             total_clusters = [record["total_clusters"] for record in cluster_records]
-            fig.add_trace(go.Scatter(x=first_request_dates, y=total_clusters, mode="markers", marker=dict(size=10, opacity=0.75, color="teal"), text=[f"Dataset ID: {record['dataset_id']}<br>Submission Date: {format_datetime(record['first_request_date'])}<br>Publication Date: {format_datetime(record.get('publication_date'))}<br>Total Curations: {record['total_clusters']}<br>Status Sequences: {record['sequence_count']}" for record in cluster_records], hoverinfo="text", name="Datasets"))
-            if len(cluster_records) >= 2:
-                x_numeric = np.array(mdates.date2num(first_request_dates), dtype=float)
-                y_numeric = np.array(total_clusters, dtype=float)
-                slope, intercept = np.polyfit(x_numeric, y_numeric, 1)
-                x_line = np.linspace(x_numeric.min(), x_numeric.max(), 100)
-                y_line = slope * x_line + intercept
-                fig.add_trace(go.Scatter(x=mdates.num2date(x_line), y=y_line, mode="lines", line=dict(color="black", width=2), name="Trend line", hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=first_request_dates, y=total_clusters, mode="markers", marker=dict(size=10, opacity=0.5, color="black"), text=[f"Dataset ID: {record['dataset_id']}<br>Submission Date: {format_datetime(record['first_request_date'])}<br>Publication Date: {format_datetime(record.get('publication_date'))}<br>Total Curations: {record['total_clusters']}<br>Status Sequences: {record['sequence_count']}" for record in cluster_records], hoverinfo="text", name="Datasets"))
+            overlay_rolling(fig, pd.DataFrame(cluster_records), "first_request_date", "total_clusters")
             fig.update_xaxes(title="Submission Date")
             fig.update_yaxes(title="Curation Sessions")
             fig.update_layout(title="Curation Sessions per Dataset vs Submission Date")
@@ -1129,21 +1258,20 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
     def metric_6_avg_curation_density(curation_clusters, event_sequences):
         cluster_length_records = []
         for dataset_id, dataset_sequences in curation_clusters.items():
-            if is_excluded_dataset(dataset_id):
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, None, event_sequences):
                 continue
-            
+
             first_request = first_request_date(dataset_id, event_sequences)
-            
+
             if not first_request:
                 continue
-            
+
             publication_date = first_publication_date(dataset_id, event_sequences)
-            cluster_lengths = []
-            
-            for sequence in dataset_sequences:
-                for cluster in sequence.get("clusters", []):
-                    cluster_lengths.append(cluster.get("length"))
-                    
+            cluster_lengths = [
+                cluster.get("length")
+                for cluster in first_cycle_clusters(dataset_sequences, first_request, publication_date)
+            ]
+
             if not cluster_lengths:
                 continue
             
@@ -1160,14 +1288,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             fig = go.Figure()
             first_request_dates = [record["first_request_date"] for record in cluster_length_records]
             average_cluster_lengths = [record["average_cluster_length"] for record in cluster_length_records]
-            fig.add_trace(go.Scatter(x=first_request_dates, y=average_cluster_lengths, mode="markers", marker=dict(size=10, opacity=0.75, color="darkorange"), text=[f"Dataset ID: {record['dataset_id']}<br>Submission Date: {format_datetime(record['first_request_date'])}<br>Publication Date: {format_datetime(record.get('publication_date'))}<br>Average Curation Density: {record['average_cluster_length']:.2f}<br>Clusters: {record['cluster_count']}" for record in cluster_length_records], hoverinfo="text", name="Datasets"))
-            if len(cluster_length_records) >= 2:
-                x_numeric = np.array(mdates.date2num(first_request_dates), dtype=float)
-                y_numeric = np.array(average_cluster_lengths, dtype=float)
-                slope, intercept = np.polyfit(x_numeric, y_numeric, 1)
-                x_line = np.linspace(x_numeric.min(), x_numeric.max(), 100)
-                y_line = slope * x_line + intercept
-                fig.add_trace(go.Scatter(x=mdates.num2date(x_line), y=y_line, mode="lines", line=dict(color="black", width=2), name="Trend line", hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=first_request_dates, y=average_cluster_lengths, mode="markers", marker=dict(size=10, opacity=0.5, color="black"), text=[f"Dataset ID: {record['dataset_id']}<br>Submission Date: {format_datetime(record['first_request_date'])}<br>Publication Date: {format_datetime(record.get('publication_date'))}<br>Average Curation Density: {record['average_cluster_length']:.2f}<br>Clusters: {record['cluster_count']}" for record in cluster_length_records], hoverinfo="text", name="Datasets"))
+            overlay_rolling(fig, pd.DataFrame(cluster_length_records), "first_request_date", "average_cluster_length")
             fig.update_xaxes(title="Submission Date")
             fig.update_yaxes(title="Average Curation Density")
             fig.update_layout(title="Average Curation Density per Dataset vs Submission Date")
@@ -1179,12 +1301,14 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         per_dataset = curator_categories.get("per_dataset", {})
         records = []
         for dataset_id, category_counts in per_dataset.items():
-            if is_excluded_dataset(dataset_id):
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, None, event_sequences):
                 continue
             first_request = first_request_date(dataset_id, event_sequences)
             if not first_request:
                 continue
             for category, count in category_counts.items():
+                if category == "Other":
+                    continue
                 records.append({"year": fiscal_year(first_request), "category": category, "count": count})
         if not records:
             return
@@ -1211,7 +1335,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             labels={"year": "Submission Year", "pct": "% of Curator Events", "category": "Category"},
         )
         fig.update_layout(barmode="stack")
-        fig.update_yaxes(range=[0, 100], ticksuffix="%")
+        fig.update_yaxes(range=[75, 100], ticksuffix="%")
         fig.show()
 
     def metric_7b_metadata_types_by_pub_year(curator_categories, event_sequences):
@@ -1254,29 +1378,28 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         fig.update_yaxes(range=[0, 100], ticksuffix="%")
         fig.show()
 
-    def metric_7c_category_mix_by_pub_year(curator_categories, event_sequences):
-        """same category mix as metric_7 but binned by publication year, for comparison"""
-        per_dataset = curator_categories.get("per_dataset", {})
-        records = []
-        for dataset_id, category_counts in per_dataset.items():
-            if is_excluded_dataset(dataset_id):
-                continue
-            pub_date = first_publication_date(dataset_id, event_sequences)
-            if not pub_date:
-                continue
-            for category, count in category_counts.items():
-                records.append({"year": fiscal_year(pub_date), "category": category, "count": count})
+    def metric_7c_category_mix_by_event_year(curator_categories):
+        """curator event category mix binned by the event's own year, restricted to events
+        inside complete curation windows. Precomputed in categorize_curator_events.py so it
+        shares metric_7's categories, including the filename-based Metadata File Operations."""
+        by_year = curator_categories.get("category_by_event_year_in_window", {})
+        records = [
+            {"year": int(year), "category": category, "count": count}
+            for category, years in by_year.items()
+            for year, count in years.items()
+        ]
+
         if not records:
             return
 
-        df = pd.DataFrame(records).groupby(["year", "category"])["count"].sum().reset_index()
+        df = pd.DataFrame(records)
         ordered = list(df.groupby("category")["count"].sum().sort_values(ascending=False).index)
 
         fig = px.bar(
             df, x="year", y="count", color="category",
             category_orders={"category": ordered},
-            title="Curator Event Category Mix per Publication Year (Counts)",
-            labels={"year": "Publication Year", "count": "Curator Events", "category": "Category"},
+            title="Curator Event Category Mix by Event Year, In Complete Curation Windows (Counts)",
+            labels={"year": "Event Year", "count": "Curator Events", "category": "Category"},
         )
         fig.update_layout(barmode="stack")
         fig.show()
@@ -1286,11 +1409,11 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         fig = px.bar(
             df, x="year", y="pct", color="category",
             category_orders={"category": ordered},
-            title="Curator Event Category Mix per Publication Year (% within year)",
-            labels={"year": "Publication Year", "pct": "% of Curator Events", "category": "Category"},
+            title="Curator Event Category Mix by Event Year, In Complete Curation Windows (% within year)",
+            labels={"year": "Event Year", "pct": "% of Curator Events", "category": "Category"},
         )
         fig.update_layout(barmode="stack")
-        fig.update_yaxes(range=[0, 100], ticksuffix="%")
+        fig.update_yaxes(range=[50, 100], ticksuffix="%")
         fig.show()
 
     def metric_1e_top_error_types(temporal_report, event_sequences):
@@ -1317,17 +1440,17 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             )
             
             if pub_types:
-                for error_type in set(pub_types):
-                    pub_dataset_counts[error_type] += 1
-            
+                for label in {error_label(error_type) for error_type in pub_types}:
+                    pub_dataset_counts[label] += 1
+
             req_date = first_request_date(dataset_id, event_sequences)
             if req_date:
                 req_types = drop_excluded_error_types(
                     error_types_near_effective(dataset_record, req_date)
                 )
                 if req_types:
-                    for error_type in set(req_types):
-                        req_dataset_counts[error_type] += 1
+                    for label in {error_label(error_type) for error_type in req_types}:
+                        req_dataset_counts[label] += 1
         if not pub_dataset_counts:
             return
 
@@ -1340,12 +1463,14 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             title="Most Common Error Types at Publication (by # of datasets)",
             labels={"dataset_count": "Number of Datasets", "type": "Error Type"},
         )
+        fig.update_yaxes(tickfont=dict(size=13))
         fig.show()
         fig2 = px.bar(
             req_df, x="dataset_count", y="type", orientation="h",
             title="Most Common Error Types at Submission (by # of datasets)",
             labels={"dataset_count": "Number of Datasets", "type": "Error Type"},
         )
+        fig2.update_yaxes(tickfont=dict(size=13))
         fig2.show()
 
     def metric_1f_resolved_by_publication(temporal_report, event_sequences):
@@ -1369,8 +1494,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             req_types = drop_excluded_error_types(error_types_near_effective(dataset_record, req_date))
             pub_types = drop_excluded_error_types(error_types_near_effective(dataset_record, pub_date))
 
-            for error_type in set(pub_types or {}) - set(req_types or {}):
-                resolved_counts[error_type] += 1
+            for label in {error_label(error_type) for error_type in set(req_types or {}) - set(pub_types or {})}:
+                resolved_counts[label] += 1
 
         if not resolved_counts:
             return
@@ -1381,6 +1506,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             title="Error Types Common at Submission but Resolved by Publication (by # of datasets)",
             labels={"dataset_count": "Number of Datasets", "type": "Error Type"},
         )
+        fig.update_yaxes(tickfont=dict(size=13))
         fig.show()
 
     def metric_1j_error_types_subsequent_pub(temporal_report, event_sequences):
@@ -1402,32 +1528,82 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                         records.append({"year": fiscal_year(pub_date), "type": error_type, "count": count, "dataset_id": dataset_id})
         plot_error_types_by_year(records, "Top 10 Error Types at Subsequent Publications by Year (% within year)", normalize=True)
 
-    def metric_1k_error_type_counts_subsequent_pub(temporal_report, event_sequences):
-        pub_records = []
+    def metric_1k_error_type_counts_subsequent_sub(temporal_report, event_sequences):
+        sub_records = []
         for dataset_id, dataset_record in temporal_report.items():
             if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, dataset_record, event_sequences):
                 continue
             error_graph = dataset_record.get("error_graph", {})
             if not error_graph:
                 continue
-            for pub_date in publication_dates(dataset_id, event_sequences)[1:]:
-                if effective_after_event(dataset_record, pub_date):
+            for sub_date in submission_dates(dataset_id, event_sequences)[1:]:
+                if effective_after_event(dataset_record, sub_date):
                     continue
-                pub_types = drop_excluded_error_types(
-                    error_types_near_effective(dataset_record, pub_date)
+                sub_types = drop_excluded_error_types(
+                    error_types_near_effective(dataset_record, sub_date)
                 )
-                pub_records.append({
+                sub_records.append({
                     "dataset_id": dataset_id,
-                    "year": fiscal_year(pub_date),
-                    "error_type_count": len(pub_types) if pub_types else 0,
+                    "year": fiscal_year(sub_date),
+                    "error_type_count": len(sub_types) if sub_types else 0,
                 })
-        if not pub_records:
+        if not sub_records:
             return
-        df = pd.DataFrame(pub_records)
+        df = pd.DataFrame(sub_records)
         fig = px.box(
             df, x="year", y="error_type_count", hover_data=["dataset_id"], points="all",
-            title="Number of Distinct Error Types per Dataset by Year (At Subsequent Publications)",
+            title="Number of Distinct Error Types per Dataset by Year (At Subsequent Submissions)",
             labels={"year": "Year", "error_type_count": "Distinct Error Types", "dataset_id": "Dataset ID"},
+        )
+        fig.show()
+
+    def _first_cycle_error_records(temporal_report, event_sequences):
+        # distinct errors at submission and publication per dataset (matrix-consistent),
+        # first cycle only, skipping failed exports
+        records = []
+        for dataset_id, dataset_record in temporal_report.items():
+            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, dataset_record, event_sequences):
+                continue
+            submission = first_request_date(dataset_id, event_sequences)
+            publication = first_publication_date(dataset_id, event_sequences)
+            if not submission or not publication:
+                continue
+            if export_failed_at(dataset_record, submission) or export_failed_at(dataset_record, publication):
+                continue
+            records.append({
+                "dataset_id": dataset_id,
+                "at_submission": distinct_errors_at(dataset_record, submission),
+                "at_publication": distinct_errors_at(dataset_record, publication),
+            })
+        return records
+
+    def metric_1l_total_errors_removed(temporal_report, event_sequences):
+        records = _first_cycle_error_records(temporal_report, event_sequences)
+        if not records:
+            return
+        df = pd.DataFrame(records)
+        df["errors_removed"] = df["at_submission"] - df["at_publication"]
+        fig = px.box(
+            df, y="errors_removed", points="all", hover_data=["dataset_id", "at_submission", "at_publication"],
+            title="Distinct Errors Removed from Submission to Publication (per Dataset, all)",
+            labels={"errors_removed": "Errors Removed (Submission − Publication)", "dataset_id": "Dataset ID"},
+        )
+        fig.show()
+
+    def metric_1m_distinct_errors_sub_vs_pub(temporal_report, event_sequences):
+        records = _first_cycle_error_records(temporal_report, event_sequences)
+        if not records:
+            return
+        rows = []
+        for record in records:
+            rows.append({"dataset_id": record["dataset_id"], "phase": "At Submission", "distinct": record["at_submission"]})
+            rows.append({"dataset_id": record["dataset_id"], "phase": "At Publication", "distinct": record["at_publication"]})
+        df = pd.DataFrame(rows)
+        fig = px.box(
+            df, x="phase", y="distinct", points="all", hover_data=["dataset_id"],
+            category_orders={"phase": ["At Submission", "At Publication"]},
+            title="Distinct Errors per Dataset at Submission vs Publication (all)",
+            labels={"phase": "", "distinct": "Distinct Errors", "dataset_id": "Dataset ID"},
         )
         fig.show()
 
@@ -1454,8 +1630,10 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         df = pd.DataFrame(records)
         df["submission"] = pd.to_datetime(df["submission"], utc=True)
 
+        # fiscal year (Feb 1 boundary) for the Year bin, matching the other error graphs
+        fiscal = df["submission"].dt.year - (df["submission"].dt.month < 2).astype(int)
         periods = {
-            "Year": df["submission"].dt.year.astype(str),
+            "Year": fiscal.astype(str),
             "Quarter": df["submission"].dt.year.astype(str) + "-Q" + df["submission"].dt.quarter.astype(str),
             "Month": df["submission"].dt.strftime("%Y-%m"),
         }
@@ -1551,7 +1729,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
 
             fig.add_trace(go.Scatter(
                 x=labels, y=distinct, mode="lines+markers",
-                line=dict(color="steelblue", width=1), marker=dict(size=5), opacity=0.35,
+                line=dict(color="darkblue", width=2), marker=dict(size=5), opacity=0.5,
                 showlegend=False, hoverinfo="text",
                 text=[f"Award: {award}<br>{label}<br>Errors at Submission: {value}<br>Dataset ID: {dataset_id}"
                       for label, value, (_, _, dataset_id) in zip(labels, distinct, points)],
@@ -1563,7 +1741,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
 
         fig.add_trace(go.Scatter(
             x=[ordinal_label(n) for n in ordinals], y=means, mode="lines+markers",
-            line=dict(color="crimson", width=3), marker=dict(size=9),
+            line=dict(color="darkred", width=5), marker=dict(size=9, color="darkred"),
             name="Mean across labs",
             text=[f"{ordinal_label(n)}<br>Mean: {mean:.2f}<br>Labs: {len(by_ordinal[n])}"
                   for n, mean in zip(ordinals, means)],
@@ -1718,7 +1896,9 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         "metric_1e_top_error_types": True,
         "metric_1f_resolved_by_publication": True,
         "metric_1j_error_types_subsequent_pub": False,
-        "metric_1k_error_type_counts_subsequent_pub": False,
+        "metric_1k_error_type_counts_subsequent_sub": False,
+        "metric_1l_total_errors_removed": True,
+        "metric_1m_distinct_errors_sub_vs_pub": True,
         "metric_1g_avg_distinct_errors_by_period": True,
         "metric_1h_soda_vs_nonsoda_submission": True,
         "metric_1i_lab_improvement_across_submissions": True,
@@ -1733,11 +1913,12 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         "metric_4c_total_curation_time": False,
         "metric_4d_gaps_between_sessions": False,
         "metric_4e_total_gaps_per_dataset": False,
+        "metric_4f_curation_touch_days": True,
         "metric_5_datasets_vs_sessions": False,
         "metric_6_avg_curation_density": False,
         "metric_7_category_mix_by_year": True,
         "metric_7b_metadata_types_by_pub_year": False,
-        "metric_7c_category_mix_by_pub_year": True,
+        "metric_7c_category_mix_by_event_year": True,
         "metric_8_submissions_per_year": True,
         "metric_8b_publications_per_year": True,
         "metric_8c_years_to_pub_by_submission_year": True,
@@ -1745,36 +1926,60 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         "metric_9b_total_hours_vs_clusters": True,
         "metric_9c_sub_to_pub_vs_curation_hours": True,
     }
+    
+    # + for curator event mix: remove records and models, dataset creation
 
     # ad hoc: run only these metrics without editing the toggles above (empty set to use the toggles as configured)
     SOLO_METRICS = {
         "metric_9_cluster_length_histogram",
         "metric_9b_total_hours_vs_clusters",
         "metric_9c_sub_to_pub_vs_curation_hours",
-        #"metric_1_standards_adherence",
-        #"metric_8_submissions_per_year",
-        #"metric_8b_publications_per_year",
-        #"metric_8c_years_to_pub_by_submission_year",
-        #"metric_4c_total_curation_time",
-        #"metric_4b_session_timespans",
-        #"metric_4d_gaps_between_sessions",
-        #"metric_4e_total_gaps_per_dataset",
-        #"metric_4_total_curation_events",
-        #"metric_1d_error_type_counts",
-        #"metric_1e_top_error_types",
-        #"metric_1f_resolved_by_publication"
-        #"metric_2_time_to_publication"
+        "metric_1_standards_adherence",
+        "metric_2_time_to_publication",
+        "metric_1h_soda_vs_nonsoda_submission",
+        "metric_1e_top_error_types",
+        "metric_1f_resolved_by_publication",
+        "metric_2_time_to_publication",
+        "metric_1d_error_type_counts",
+        "metric_7c_category_mix_by_pub_year",
+        "metric_1i_lab_improvement_across_submissions",
+        "metric_1j_error_types_subsequent_pub",
+        "metric_1k_error_type_counts_subsequent_sub",
+        "metric_4f_curation_touch_days",
+        "metric_4c_total_curation_time",
+        "metric_1l_total_errors_removed",
+        "metric_1m_distinct_errors_sub_vs_pub"
     }
+    # for 4f, plot as a histogram; ratio of days with cur touch divided by day sub->pub
     if SOLO_METRICS:
         metric_toggles = {key: key in SOLO_METRICS for key in metric_toggles}
 
-    #for i, k in enumerate(metric_toggles):
-    #    if i != 3:
-    #       metric_toggles[k] = False
+    # + number of days with at least one curation touch | metric_4f_curation_touch_days
+    # + for estimated total curation time scatterplot; rolling average instead of trend line | metric_4c_total_curation_time
+        # + include mean and standard deviation transparent background to the rolling average
+        # + make dots 50% transparent
+    # + set file structure to 75% for all years | metric_7c_category_mix_by_pub_year
+    # + errors most common at submisson | metric_1e_top_error_types
+    # + errors most commonly fixed at publication | metric_1f_resolved_by_publication
+    # + total errors removed (diff) from sub->pub, not over time; all
+    # + box plot of distinct errors per dataset at submission, at publication, not over time; all
+    # + submission errors at subsequent publications
+    
+    # + add rolling average count of day in legend for 4c
+    # add metadata category by Tom slack
+    
+    # + style
+        # + transparent background, light gray grid, black axes, black dots
+        # + box plots can be transparent without fill; outlines stronger color? 
+        # + black and white
+
+    # + use all_datasets_pipeline as ground truth, exclude sample/test and non-SPARC; REVA continue excluding using old exclusion file
+    
+    # for everything relevant, exclude if either sub or pub failed, instead of only if the relevant one failed
 
     if metric_toggles.get("metric_1_standards_adherence"):
         metric_1_standards_adherence(temporal_report, event_sequences, sparcur_updates)
-    if metric_toggles.get("metric_1b_error_types"):
+    if metric_toggles.get("metric_1b_error_types"): 
         metric_1b_error_types(temporal_report, event_sequences)
     if metric_toggles.get("metric_1c_removed_errors"):
         metric_1c_removed_errors(temporal_report, event_sequences)
@@ -1786,8 +1991,12 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         metric_1f_resolved_by_publication(temporal_report, event_sequences)
     if metric_toggles.get("metric_1j_error_types_subsequent_pub"):
         metric_1j_error_types_subsequent_pub(temporal_report, event_sequences)
-    if metric_toggles.get("metric_1k_error_type_counts_subsequent_pub"):
-        metric_1k_error_type_counts_subsequent_pub(temporal_report, event_sequences)
+    if metric_toggles.get("metric_1k_error_type_counts_subsequent_sub"):
+        metric_1k_error_type_counts_subsequent_sub(temporal_report, event_sequences)
+    if metric_toggles.get("metric_1l_total_errors_removed"):
+        metric_1l_total_errors_removed(temporal_report, event_sequences)
+    if metric_toggles.get("metric_1m_distinct_errors_sub_vs_pub"):
+        metric_1m_distinct_errors_sub_vs_pub(temporal_report, event_sequences)
     if metric_toggles.get("metric_1g_avg_distinct_errors_by_period"):
         metric_1g_avg_distinct_errors_by_period(temporal_report, event_sequences)
     if metric_toggles.get("metric_1h_soda_vs_nonsoda_submission"):
@@ -1816,6 +2025,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         metric_4d_gaps_between_sessions(curation_clusters, event_sequences)
     if metric_toggles.get("metric_4e_total_gaps_per_dataset"):
         metric_4e_total_gaps_per_dataset(curation_clusters, event_sequences)
+    if metric_toggles.get("metric_4f_curation_touch_days"):
+        metric_4f_curation_touch_days(curation_clusters, event_sequences)
     if metric_toggles.get("metric_5_datasets_vs_sessions"):
         metric_5_datasets_vs_sessions(curation_clusters, event_sequences)
     if metric_toggles.get("metric_6_avg_curation_density"):
@@ -1824,8 +2035,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         metric_7_category_mix_by_year(curator_categories, event_sequences)
     if metric_toggles.get("metric_7b_metadata_types_by_pub_year"):
         metric_7b_metadata_types_by_pub_year(curator_categories, event_sequences)
-    if metric_toggles.get("metric_7c_category_mix_by_pub_year"):
-        metric_7c_category_mix_by_pub_year(curator_categories, event_sequences)
+    if metric_toggles.get("metric_7c_category_mix_by_event_year"):
+        metric_7c_category_mix_by_event_year(curator_categories)
     if metric_toggles.get("metric_8_submissions_per_year"):
         metric_8_submissions_per_year(temporal_report, event_sequences)
     if metric_toggles.get("metric_8b_publications_per_year"):
@@ -1847,19 +2058,19 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
     # / new graph including all curation intervals, request to reject AND request to publish (AND(?) request to cancel)
         # / another graph only inluding request to publish/embargo going directly to publish, no rejections
         
-    # plotly, try to make the x and y axis on sub->pub graph be equal (1 year is 365 days on x and y)
-    # new histogram: number of curation clusters by cluster time/length
-    # new histogram: estimated total curation hours vs number of clusters
-    # new histogram: time from sub to pub by curation hours
-    # export generated matrix with human readable error titles from error map instead of techinical descriptions
-        # need to go through and fix error map error format discrepancies + revert back to old error tagging system
-    # check the remaining < 5 day sub->pubs and see if they're scaffolds that are being missed for some reason
+    # + plotly, try to make the x and y axis on sub->pub graph be equal (1 year is 365 days on x and y)
+    # + new histogram: number of curation clusters by cluster time/length
+    # + new histogram: estimated total curation hours vs number of clusters
+    # + new histogram: time from sub to pub by curation hours
+    # + export generated matrix with human readable error titles from error map instead of techinical descriptions
+        # + need to go through and fix error map error format discrepancies + revert back to old error tagging system
+    # + check the remaining < 5 day sub->pubs and see if they're scaffolds that are being missed for some reason
     
-    # matrix, inclusion based on XOR of error existence between sub and pub, one tab/file per dataset
-        # show only in sub first, then only in pub second
-    # error matrix transpose based on Tom slack msg; name csvs by dataset id; mark the ones that have higher pub errs vs one with hier req errs
+    # + matrix, inclusion based on XOR of error existence between sub and pub, one tab/file per dataset
+        # + show only in sub first, then only in pub second
+    # + error matrix transpose based on attached csv; name csvs by dataset id; mark the ones that have higher pub errs vs one with hier req errs
     
-    # metric_1 fix using wrong curation export (first instead of last)
+    # + metric_1 fix using wrong curation export (first instead of last)
     
     # for publication: change temporal_report.json to use the subset of the curation exports we actually used
     # for publication: change pennsieve event list to anaonymize users and events and dataset uuids + date shifting + dataset titles

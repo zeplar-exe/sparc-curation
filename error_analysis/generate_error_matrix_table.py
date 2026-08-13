@@ -3,7 +3,7 @@ import datetime
 import json
 from datetime import timezone
 from collections import Counter, defaultdict
-from report_common import is_excluded_dataset, parse_iso8601, is_excluded_error_type, get_error_type_format, get_error_format_dict_data, get_error_id, true_submission_date, true_publication_date, is_excluded_computational, dataset_type, doi_v1, reconciliation_publication_year, nearest_export_key_effective, error_types_near_effective, effective_export_ts_by_key
+from report_common import is_excluded_dataset, parse_iso8601, is_excluded_error_type, get_error_type_format, get_error_format_dict_data, get_error_id, get_canonical_title, true_submission_date, true_publication_date, is_excluded_computational, dataset_type, doi_v1, reconciliation_publication_year, nearest_export_key_effective, error_types_near_effective, effective_export_ts_by_key
 
 EVENT_SEQUENCES = "./pennsieve_event_series.json"
 TEMPORAL_REPORT = "./temporal_report.json"
@@ -59,6 +59,7 @@ def main():
     datasets_by_message = defaultdict(set)  # message -> set of dataset ids
     message_to_path = {}  # message -> error path (#/...)
     message_to_id = {}    # message -> canonical error-map # (via collapse)
+    message_to_title = {} # message -> human-readable error-map title (raw fallback)
 
     window_start = datetime.datetime(2022, 4, 1, tzinfo=timezone.utc)
 
@@ -126,7 +127,7 @@ def main():
             for phase, event_dt, event_raw in (
                 ("submission", req, req_raw),
                 ("publication", acc, acc_raw),
-            ):        
+            ):
                 event_ts = int(event_dt.timestamp())
                 key = nearest_export_key_effective(record, event_ts)
 
@@ -145,20 +146,16 @@ def main():
 
                 if not failed:
                     for message in snapshot:
-                        if is_excluded_error_type(message):
-                            continue
-                        path = message.split(":")[0]
-                        fmt = get_error_type_format(message)
-                        data = get_error_format_dict_data(fmt)
-                        #print(fmt)
-                        # if not data:
+                        #if is_excluded_error_type(message):
                         #    continue
-                        full = data["Error Title"] if data else message
-                        # full = message # f"{path}:{fmt}"
+                        path = message.split(":")[0]
+                        # one column per raw message (no collapse); header shows the title, path its own row
+                        full = message
                         message_totals[full] += 1
                         datasets_by_message[full].add(dataset_id)
                         message_to_path[full] = path
                         message_to_id[full] = get_error_id(message)
+                        message_to_title[full] = get_canonical_title(message)
 
                 eff = datetime.datetime.fromtimestamp(eff_ts, datetime.timezone.utc)
                 fixed = {
@@ -190,17 +187,19 @@ def main():
 
     with open(OUT, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(FIXED_FIELDS + message_columns)
-        
+        # header row: human-readable error titles (duplicated where messages share a title)
+        writer.writerow(FIXED_FIELDS + [message_to_title.get(msg, msg) for msg in message_columns])
+
         summary_row = ["how_many_datasets_have_this_error"] + [""] * (len(FIXED_FIELDS) - 1)
         writer.writerow(summary_row + [len(datasets_by_message[msg]) for msg in message_columns])
 
+        # path on its own row
         path_row = ["error_path"] + [""] * (len(FIXED_FIELDS) - 1)
         writer.writerow(path_row + [message_to_path.get(msg, "") for msg in message_columns])
-        
+
         id_row = ["error_id"] + [""] * (len(FIXED_FIELDS) - 1)
         writer.writerow(id_row + [message_to_id.get(msg, "") for msg in message_columns])
-        
+
         for fixed, snapshot in rows:
             err_row = [1 if msg in snapshot else 0 for msg in message_columns]
             writer.writerow(
