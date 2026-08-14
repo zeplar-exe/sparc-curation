@@ -26,25 +26,27 @@ _reconciliation_rows = None
 
 EXCLUDED_PATH_PREFIXES = ("#/inputs", "#/specimen_dirs", "#/entity_dirs", "#/meta/techniques", "#/code_description") # for graphs
 
-# old exclusion file (REVA datasets) is still applied before the ground truth
+# dataset_exclusion_list.csv is the ground truth for all excluded datasets
+# (sample/test, scaffold, computational, REVA). Criteria are kept so the
+# computational-scaffold check can be driven from the same source.
+DATASET_EXCLUSION_CRITERIA = {}
 with open("./dataset_exclusion_list.csv") as f:
     for row in csv.DictReader(f):
-        EXCLUDED_DATASET_IDS.append(row["Dataset ID"])
+        did = row["Dataset ID"].strip()
+        EXCLUDED_DATASET_IDS.append(did)
+        DATASET_EXCLUSION_CRITERIA[did] = (row.get("exclusion criteria") or "").strip().lower()
 
 with open("./big-did.json") as f:
     for did, entry in json.load(f).items():
         PENNSIEVE_DATASET_MAP[did] = entry["id_published"]
 
-# inclusion ground truth; the pipeline dataset list, keeping only SPARC and dropping sample/test
+# inclusion scope: the pipeline dataset list, keeping only SPARC. Sample/test (and every
+# other) exclusion is governed by the dataset_exclusion_list.csv ground truth, not here.
 with open("./all_datasets_pipeline.csv", encoding="utf-8-sig") as f:
     for raw in csv.DictReader(f):
         row = {(key or "").strip(): value for key, value in raw.items()}
         if (row.get("organization") or "").strip() != "SPARC":
             continue
-        if (row.get("test dataset exclude") or "").lower() == "sample/test":
-            continue
-        #if (row.get("status") or "").lower() != "completed":
-        #    continue
         WHITELIST_DATASET_IDS.append(row["node_id"].strip())
 
 with open("./SPARC_error_map.csv") as f:
@@ -360,7 +362,9 @@ def is_scaffold(dataset_id):
 
 
 def is_excluded_computational(dataset_id):
-    return dataset_type(dataset_id) == "computational" and is_scaffold(dataset_id)
+    # scaffold / computational exclusions come from the ground-truth exclusion list
+    crit = DATASET_EXCLUSION_CRITERIA.get(normalize_dataset_id(dataset_id), "")
+    return crit.startswith("scaffold") or crit.startswith("computational")
 
 
 def doi_v1(dataset_id):
@@ -380,9 +384,17 @@ with open("./error-info.json") as _ef:
     _error_info = {entry["id"]: (entry["description"], entry["format"]) for entry in json.load(_ef)}
 
 
+# bare top-level (#/) umbrella duplicates of errors that also surface at their real
+# location (e.g. #/meta); the #/ copy is excluded, the specific one is kept
+TOP_LEVEL_EXCLUDED_IDS = ("33", "97")  # protocol_url_or_doi missing; not valid under any schema (anyOf)
+
+
 def is_excluded_error_type(error_type):
     # Excluded if the error path excluded or error map marks Excluded?
-    if error_type.split(":", 1)[0].startswith(EXCLUDED_PATH_PREFIXES):
+    path = error_type.split(":", 1)[0]
+    if path.startswith(EXCLUDED_PATH_PREFIXES):
+        return True
+    if path == "#/" and get_error_id(error_type) in TOP_LEVEL_EXCLUDED_IDS:
         return True
     return get_error_id(error_type) in EXCLUDED_IDS
 

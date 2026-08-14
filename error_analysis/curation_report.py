@@ -486,12 +486,6 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
 
     def metric_1_standards_adherence(temporal_report, event_sequences, sparcur_updates):
         records = []
-        colors = {
-            "precision": "royalblue",
-            "sparc": "orange",
-            "rejoin": "green",
-            "unknown": "gray",
-        }
         # distinct non-excluded error types (matches the matrix's included_errors_present)
         source_label = "Distinct Error Types"
 
@@ -510,30 +504,35 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             if export_failed_at(dataset_record, submission) or export_failed_at(dataset_record, publication):
                 continue
 
-            org = (
-                "precision" if dataset_record.get("is_precision") else
-                "sparc" if dataset_record.get("is_sparc") else
-                "rejoin" if dataset_record.get("is_rejoin") else
-                "unknown"
-            )
             uses_soda = dataset_record.get("uses_soda", False)
 
-            req_error_count = distinct_errors_at(dataset_record, submission)
-            pub_error_count = distinct_errors_at(dataset_record, publication)
+            # actual error-type sets, so the net change is added minus removed
+            req_set = set(drop_excluded_error_types(error_types_near_effective(dataset_record, submission)) or {})
+            pub_set = set(drop_excluded_error_types(error_types_near_effective(dataset_record, publication)) or {})
+            added = pub_set - req_set
+            removed = req_set - pub_set
 
             records.append({
                 "dataset_id": dataset_id,
                 "request_time": submission,
                 "publish_time": publication,
-                "error_diff": pub_error_count - req_error_count,
-                "req_error_count": req_error_count,
-                "pub_error_count": pub_error_count,
+                "error_diff": len(added) - len(removed),
+                "req_error_count": len(req_set),
+                "pub_error_count": len(pub_set),
+                "added": len(added),
+                "removed": len(removed),
                 "uses_soda": uses_soda,
-                "org": org,
             })
 
-        for soda_val, soda_label in [(True, "SODA"), (False, "non-SODA")]:
-            filtered = [r for r in records if r["uses_soda"] == soda_val]
+        # SODA, non-SODA, and all datasets combined; version markers only on the latter two
+        panels = [
+            ("SODA", lambda r: r["uses_soda"], False),
+            ("non-SODA", lambda r: not r["uses_soda"], True),
+            ("All datasets", lambda r: True, True),
+        ]
+
+        for panel_label, predicate, show_versions in panels:
+            filtered = [r for r in records if predicate(r)]
 
             if not filtered:
                 continue
@@ -543,7 +542,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             y_absmax = max(abs(min(y_vals)), abs(max(y_vals)))
             y_buffer = max(1, y_absmax * 0.05)
             hover_text = [
-                f"Dataset ID: {r['dataset_id']}<br>Submission Date: {format_datetime(r['request_time'])}<br>Publication Date: {format_datetime(r['publish_time'])}<br>Diff: {r['error_diff']}<br>At Submission: {r.get('req_error_count', 'N/A')}<br>At Publish: {r.get('pub_error_count', 'N/A')}"
+                f"Dataset ID: {r['dataset_id']}<br>Submission Date: {format_datetime(r['request_time'])}<br>Publication Date: {format_datetime(r['publish_time'])}<br>Diff: {r['error_diff']}<br>At Submission: {r['req_error_count']}<br>At Publish: {r['pub_error_count']}<br>Added: {r['added']}<br>Removed: {r['removed']}"
                 for r in filtered
             ]
 
@@ -553,30 +552,31 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                 y=y_vals,
                 mode="markers",
                 marker=dict(color="black", size=10, opacity=0.5),
-                name=f"{soda_label} ({len(filtered)})",
+                name=f"{panel_label} ({len(filtered)})",
                 text=hover_text,
                 hoverinfo="text",
             ))
 
             min_x = min(x_vals)
 
-            for update in sparcur_updates:
-                update_date = parse_mmddyyyy(update["date"])
+            if show_versions:
+                for update in sparcur_updates:
+                    update_date = parse_mmddyyyy(update["date"])
 
-                if not update_date:
-                    continue
-                if min_x.tzinfo is not None and update_date.tzinfo is None:
-                    update_date = update_date.replace(tzinfo=min_x.tzinfo)
-                elif min_x.tzinfo is None and update_date.tzinfo is not None:
-                    min_x = min_x.replace(tzinfo=update_date.tzinfo)
-                if update_date >= min_x:
-                    fig.add_vline(x=update_date, line=dict(color="red", dash="dash"), opacity=0.7)
-                    fig.add_annotation(x=update_date, y=1, yref="paper", text=update["version"], showarrow=False)
+                    if not update_date:
+                        continue
+                    if min_x.tzinfo is not None and update_date.tzinfo is None:
+                        update_date = update_date.replace(tzinfo=min_x.tzinfo)
+                    elif min_x.tzinfo is None and update_date.tzinfo is not None:
+                        min_x = min_x.replace(tzinfo=update_date.tzinfo)
+                    if update_date >= min_x:
+                        fig.add_vline(x=update_date, line=dict(color="red", dash="dash"), opacity=0.7)
+                        fig.add_annotation(x=update_date, y=1, yref="paper", text=update["version"], showarrow=False)
 
             fig.add_hline(y=0, line=dict(color="gray", dash="dash"), opacity=0.5)
             fig.update_yaxes(range=[-y_absmax - y_buffer, y_absmax + y_buffer], title=f"{source_label} Difference (Publication - Submission)")
             fig.update_xaxes(title="Submission Date")
-            fig.update_layout(title=f"Standards Adherence: {source_label} Difference (Publication - Submission)<br>{soda_label}")
+            fig.update_layout(title=f"Standards Adherence: {source_label} Difference (Publication - Submission)<br>{panel_label}")
             fig.show()
 
     def metric_1b_error_types(temporal_report, event_sequences):
@@ -771,7 +771,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                      points="all",
                      title="Submission-to-Publication Time by Submission Year",
                      labels={"dataset_id": "Dataset ID", "days": "Days from Submission to Publication", "submission_year": "Submission Year", "publication_date": "Publication Date"})
-        fig.update_traces(boxmean="sd")
+        fig.update_traces(boxmean=True)
 
         fig.add_annotation(xref="paper", yref="paper", x=0, y=1.08, showarrow=False, xanchor="left",
                            text=f"Overall: mean {mean_days:.0f} d, SD {std_days:.0f} d (n={len(df)})",
@@ -782,7 +782,6 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             fig.add_annotation(x=1.01, xref="paper", y=tick_value, yref="y", text=tick_label, showarrow=False, xanchor="left", yanchor="middle", font=dict(color="gray", size=11))
         fig.update_yaxes(title="Days from Submission to Publication")
 
-        add_unpublished_caption(fig, event_sequences)
         fig.show()
 
     def metric_2c_sub_to_pub_sem(event_sequences):
@@ -818,9 +817,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                          hover_data=["dataset_id", "publication_date"],
                          title=f"Submission-to-Publication Time by {when} Year (≤ 95th pct, {p95:.0f} d)",
                          labels={year_col: x_label, "days": "Days from Submission to Publication", "dataset_id": "Dataset ID", "publication_date": "Publication Date"})
-            fig.update_traces(boxmean="sd")
-            if year_col == "submission_year":
-                add_unpublished_caption(fig, event_sequences)
+            fig.update_traces(boxmean=True)
             fig.show()
 
     def metric_2e_sub_to_pub_by_pub_year(event_sequences):
@@ -836,7 +833,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                      hover_data=["dataset_id", "publication_date"],
                      title="Submission-to-Publication Time by Publication Year",
                      labels={"publication_year": "Publication Year", "days": "Days from Submission to Publication", "dataset_id": "Dataset ID", "publication_date": "Publication Date"})
-        fig.update_traces(boxmean="sd")
+        fig.update_traces(boxmean=True)
         fig.show()
 
     def metric_3_event_types(status_delimited_sequences):
@@ -1547,7 +1544,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         fig.update_yaxes(tickfont=dict(size=13))
         fig.show()
 
-    def metric_1j_error_types_subsequent_pub(temporal_report, event_sequences):
+    def metric_1j_error_types_subsequent_sub(temporal_report, event_sequences):
         records = []
         for dataset_id, dataset_record in temporal_report.items():
             if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, dataset_record, event_sequences):
@@ -1555,16 +1552,16 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             error_graph = dataset_record.get("error_graph", {})
             if not error_graph:
                 continue
-            for pub_date in publication_dates(dataset_id, event_sequences)[1:]:
-                if effective_after_event(dataset_record, pub_date):
+            for sub_date in submission_dates(dataset_id, event_sequences)[1:]:
+                if effective_after_event(dataset_record, sub_date):
                     continue
-                pub_types = drop_excluded_error_types(
-                    error_types_near_effective(dataset_record, pub_date)
+                sub_types = drop_excluded_error_types(
+                    error_types_near_effective(dataset_record, sub_date)
                 )
-                if pub_types:
-                    for error_type, count in pub_types.items():
-                        records.append({"year": fiscal_year(pub_date), "type": error_type, "count": count, "dataset_id": dataset_id})
-        plot_error_types_by_year(records, "Top 10 Error Types at Subsequent Publications by Year (% within year)", normalize=True)
+                if sub_types:
+                    for error_type, count in sub_types.items():
+                        records.append({"year": fiscal_year(sub_date), "type": error_type, "count": count, "dataset_id": dataset_id})
+        plot_error_types_by_year(records, "Top 10 Error Types at Subsequent Submissions by Year (% within year)", normalize=True)
 
     def metric_1k_error_type_counts_subsequent_sub(temporal_report, event_sequences):
         sub_records = []
@@ -1709,8 +1706,13 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             return
 
         df = pd.DataFrame(records)
+        counts = df["group"].value_counts().to_dict()
+        labeled = {group: f"{group} (N={n})" for group, n in counts.items()}
+        df["group"] = df["group"].map(labeled)
+        order = [labeled[group] for group in ("SODA", "non-SODA") if group in labeled]
         fig = px.box(
             df, x="group", y="distinct", points="all", hover_data=["dataset_id"],
+            category_orders={"group": order},
             title="Distinct Errors per Dataset at Submission: SODA vs non-SODA (3.0.0 excluded)",
             labels={"group": "", "distinct": "Distinct Errors / Dataset", "dataset_id": "Dataset ID"},
         )
@@ -1727,6 +1729,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
 
         WINDOW_START = datetime.datetime(2022, 4, 1, tzinfo=datetime.timezone.utc)
         in_window_cap = 15
+        excluded_awards = {"75N98022C00018", "OT3OD025349"}
 
         # collect every submission per lab, keeping pre-window ones so they can be left
         # blank and shift the lab's in-window submissions rightward to their true ordinal
@@ -1734,6 +1737,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
 
         for dataset_id, dataset_record in temporal_report.items():
             if not dataset_record.get("error_graph"):
+                continue
+            if is_excluded_computational(dataset_id):  # drop scaffolds
                 continue
 
             submission = first_request_date(dataset_id, event_sequences, floor=False)
@@ -1745,7 +1750,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
             # a trailing ", second-award" splits one lab across award strings; bin on the first
             award = award.split(",")[0].strip()
 
-            if not award or award == "<unknown>":
+            if not award or award == "<unknown>" or award in excluded_awards:
                 continue
 
             in_window = submission >= WINDOW_START
@@ -1988,7 +1993,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         fig = px.scatter(df, x="num_clusters", y="total_hours", hover_data=["dataset_id"],
                          title="Estimated Total Curation Hours vs Number of Curation Sessions",
                          labels={"num_clusters": "Number of Curation Sessions", "total_hours": "Total Curation Hours", "dataset_id": "Dataset ID"})
-        fig.update_traces(marker=dict(size=9, opacity=0.7))
+        fig.update_traces(marker=dict(size=9, opacity=0.7, color="black"))
         fig.show()
 
     def metric_9c_sub_to_pub_vs_curation_hours(temporal_report, curation_clusters, event_sequences):
@@ -2002,7 +2007,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         fig = px.scatter(df, x="total_hours", y="days_to_pub", hover_data=["dataset_id"],
                          title="Submission-to-Publication Time vs Estimated Curation Hours",
                          labels={"total_hours": "Total Curation Hours", "days_to_pub": "Days from Submission to Publication", "dataset_id": "Dataset ID"})
-        fig.update_traces(marker=dict(size=9, opacity=0.7))
+        fig.update_traces(marker=dict(size=9, opacity=0.7, color="black"))
         fig.show()
 
     metric_toggles = {
@@ -2013,7 +2018,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         "metric_1e_top_error_types": True,
         "metric_1n_error_ranking_by_template_version": True,
         "metric_1f_resolved_by_publication": True,
-        "metric_1j_error_types_subsequent_pub": False,
+        "metric_1j_error_types_subsequent_sub": False,
         "metric_1k_error_type_counts_subsequent_sub": False,
         "metric_1l_total_errors_removed": True,
         "metric_1m_distinct_errors_sub_vs_pub": True,
@@ -2062,7 +2067,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         "metric_4f_curation_touch_days",
         "metric_4c_total_curation_time",
         "metric_1l_total_errors_removed",
-        "metric_1m_distinct_errors_sub_vs_pub"
+        "metric_1m_distinct_errors_sub_vs_pub",
+        "metric_1n_error_ranking_by_template_version"
     }
     SOLO_METRICS = {
         "metric_1i_lab_improvement_across_submissions"
@@ -2085,8 +2091,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         metric_1n_error_ranking_by_template_version(temporal_report, event_sequences)
     if metric_toggles.get("metric_1f_resolved_by_publication"):
         metric_1f_resolved_by_publication(temporal_report, event_sequences)
-    if metric_toggles.get("metric_1j_error_types_subsequent_pub"):
-        metric_1j_error_types_subsequent_pub(temporal_report, event_sequences)
+    if metric_toggles.get("metric_1j_error_types_subsequent_sub"):
+        metric_1j_error_types_subsequent_sub(temporal_report, event_sequences)
     if metric_toggles.get("metric_1k_error_type_counts_subsequent_sub"):
         metric_1k_error_type_counts_subsequent_sub(temporal_report, event_sequences)
     if metric_toggles.get("metric_1l_total_errors_removed"):
