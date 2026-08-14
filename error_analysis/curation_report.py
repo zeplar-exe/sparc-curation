@@ -1463,6 +1463,54 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         fig2.update_yaxes(tickfont=dict(size=13))
         fig2.show()
 
+    def metric_1n_error_ranking_by_template_version(temporal_report, event_sequences):
+        """most common error types at submission and at publication, stacked by template version."""
+        sub_counts = defaultdict(Counter)  # error label -> Counter(template version -> dataset count)
+        pub_counts = defaultdict(Counter)
+
+        for dataset_id, dataset_record in temporal_report.items():
+            if is_excluded_dataset(dataset_id):
+                continue
+            if not dataset_record.get("error_graph"):
+                continue
+
+            req_date = first_request_date(dataset_id, event_sequences)
+            pub_date = first_publication_date(dataset_id, event_sequences)
+
+            if graph_excluded(dataset_id, dataset_record, event_sequences) or \
+               (req_date and effective_after_event(dataset_record, req_date)) or \
+               (pub_date and effective_after_event(dataset_record, pub_date)):
+                continue
+
+            if req_date:
+                req_types = drop_excluded_error_types(error_types_near_effective(dataset_record, req_date))
+                version = template_version_near(dataset_record, req_date) or "<unknown>"
+                for label in {error_label(error_type) for error_type in (req_types or {})}:
+                    sub_counts[label][version] += 1
+
+            if pub_date:
+                pub_types = drop_excluded_error_types(error_types_near_effective(dataset_record, pub_date))
+                version = template_version_near(dataset_record, pub_date) or "<unknown>"
+                for label in {error_label(error_type) for error_type in (pub_types or {})}:
+                    pub_counts[label][version] += 1
+
+        for counts, when in [(sub_counts, "Submission"), (pub_counts, "Publication")]:
+            if not counts:
+                continue
+            totals = {label: sum(versions.values()) for label, versions in counts.items()}
+            top = sorted(totals, key=totals.get, reverse=True)[:20]
+            rows = [{"type": label, "template_version": version, "dataset_count": n}
+                    for label in top for version, n in counts[label].items()]
+            df = pd.DataFrame(rows)
+            fig = px.bar(
+                df, x="dataset_count", y="type", color="template_version", orientation="h",
+                category_orders={"type": list(reversed(top))},
+                title=f"Error Type Ranking at {when} by Template Version (by # of datasets)",
+                labels={"dataset_count": "Number of Datasets", "type": "Error Type", "template_version": "Template Version"},
+            )
+            fig.update_yaxes(tickfont=dict(size=13))
+            fig.show()
+
     def metric_1f_resolved_by_publication(temporal_report, event_sequences):
         resolved_counts = Counter()
 
@@ -1675,75 +1723,154 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
                          "Seventh", "Eighth", "Ninth", "Tenth"]
 
         def ordinal_label(n):
-            return f"{ordinal_words[n - 1]} Submission" if n <= len(ordinal_words) else f"Submission #{n}"
+            return ordinal_words[n - 1] if n <= len(ordinal_words) else f"#{n}"
 
-        by_lab = defaultdict(list)
+        WINDOW_START = datetime.datetime(2022, 4, 1, tzinfo=datetime.timezone.utc)
+        in_window_cap = 15
+
+        # collect every submission per lab, keeping pre-window ones so they can be left
+        # blank and shift the lab's in-window submissions rightward to their true ordinal
+        raw_by_lab = defaultdict(list)
 
         for dataset_id, dataset_record in temporal_report.items():
-            #if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, dataset_record, event_sequences):
-            #    continue
             if not dataset_record.get("error_graph"):
                 continue
 
-            submission = first_request_date(dataset_id, event_sequences)
+            submission = first_request_date(dataset_id, event_sequences, floor=False)
 
-            if submission is None or effective_after_event(dataset_record, submission):
+            if submission is None:
                 continue
 
             award = award_number_near(dataset_record, submission)
+            # a trailing ", second-award" splits one lab across award strings; bin on the first
+            award = award.split(",")[0].strip()
 
             if not award or award == "<unknown>":
                 continue
 
-            by_lab[award].append((submission, distinct_errors_at(dataset_record, submission), dataset_id))
+            in_window = submission >= WINDOW_START
 
-        # cap at the first 8 submissions per lab
-        cap = 8
-        by_lab = {award: sorted(points)[:cap] for award, points in by_lab.items() if len(points) >= 2}
+            if in_window and effective_after_event(dataset_record, submission):
+                continue
+
+            value = distinct_errors_at(dataset_record, submission) if in_window else None
+            failed = export_failed_at(dataset_record, submission) if in_window else False
+            raw_by_lab[award].append((submission, in_window, value, dataset_id, failed))
+
+        # each lab's in-window submissions sit at their true ordinal, after any pre-window
+        # submissions; the axis is bounded to the first 45 ticks, so points past ordinal 45
+        # (labs pushed far right by many pre-window submissions) are not shown
+        max_ticks = 45
+        by_lab = {}
+        for award, subs in raw_by_lab.items():
+            subs.sort(key=lambda s: s[0])
+            pre_count = sum(1 for s in subs if not s[1])
+            in_window_subs = [s for s in subs if s[1]][:in_window_cap]
+            if len(in_window_subs) < 2:
+                continue
+            points = [(pre_count + i, value, dataset_id, failed)
+                      for i, (_, _, value, dataset_id, failed) in enumerate(in_window_subs, start=1)
+                      if pre_count + i <= max_ticks]
+            if points:
+                by_lab[award] = points
 
         if not by_lab:
             return
 
-        max_submissions = max(len(points) for points in by_lab.values())
-        categories = [ordinal_label(n) for n in range(1, max_submissions + 1)]
+        any_shifted = any(points[0][0] > 1 for points in by_lab.values())
+        max_ordinal = max(ordinal for points in by_lab.values() for ordinal, _, _, _ in points)
+        categories = [ordinal_label(n) for n in range(1, max_ordinal + 1)]
 
         fig = go.Figure()
         by_ordinal = defaultdict(list)
 
+        substitutions = 0
         for award, points in by_lab.items():
-            labels = [ordinal_label(n) for n in range(1, len(points) + 1)]
-            distinct = [value for _, value, _ in points]
+            ordinals_lab = [ordinal for ordinal, _, _, _ in points]
+            labels = [ordinal_label(o) for o in ordinals_lab]
+            raw = [value for _, value, _, _ in points]
+            failed = [f for _, _, _, f in points]
 
-            for n, value in enumerate(distinct, start=1):
-                by_ordinal[n].append(value)
+            # a submission whose curation export failed has an unknown count; carry the
+            # previous submission's value forward so the lab's line stays flat (straight)
+            # instead of dropping to a spurious zero
+            plotted = []
+            last_valid = None
+            for value, is_failed in zip(raw, failed):
+                if is_failed and last_valid is not None:
+                    plotted.append(last_valid)
+                    substitutions += 1
+                else:
+                    plotted.append(value)
+                    if not is_failed:
+                        last_valid = value
+
+            for ordinal, value, is_failed in zip(ordinals_lab, plotted, failed):
+                if not is_failed:
+                    by_ordinal[ordinal].append(value)
 
             fig.add_trace(go.Scatter(
-                x=labels, y=distinct, mode="lines+markers",
-                line=dict(color="darkblue", width=2), marker=dict(size=5), opacity=0.5,
+                x=labels, y=plotted, mode="lines+markers",
+                line=dict(color="gray", width=2), marker=dict(size=5), opacity=0.5,
                 showlegend=False, hoverinfo="text",
-                text=[f"Award: {award}<br>{label}<br>Errors at Submission: {value}<br>Dataset ID: {dataset_id}"
-                      for label, value, (_, _, dataset_id) in zip(labels, distinct, points)],
+                text=[f"Award: {award}<br>Submission {ordinal}<br>Errors at Submission: {value}"
+                      + (" (reused — submission export failed)" if is_failed else "")
+                      + f"<br>Dataset ID: {dataset_id}"
+                      for ordinal, value, is_failed, (_, _, dataset_id, _) in zip(ordinals_lab, plotted, failed, points)],
             ))
 
-        # only average over ordinals shared by enough labs, so the tail isn't a single lab
-        ordinals = [n for n in sorted(by_ordinal) if len(by_ordinal[n]) >= 3]
-        means = [sum(by_ordinal[n]) / len(by_ordinal[n]) for n in ordinals]
+        # average over ordinals shared by at least two labs (a single lab has no spread)
+        ordinals = [n for n in sorted(by_ordinal) if len(by_ordinal[n]) >= 2]
+        mean_x = [ordinal_label(n) for n in ordinals]
+        means = [float(np.mean(by_ordinal[n])) for n in ordinals]
+        sds = [float(np.std(by_ordinal[n], ddof=1)) for n in ordinals]
+        sems = [sd / np.sqrt(len(by_ordinal[n])) for sd, n in zip(sds, ordinals)]
 
+        # ±1 SD error bars (wider spread), drawn first so the shorter SEM bars overlay on top.
+        # the markers sit under the size-9 black mean markers, so they only color the legend swatch
         fig.add_trace(go.Scatter(
-            x=[ordinal_label(n) for n in ordinals], y=means, mode="lines+markers",
-            line=dict(color="darkred", width=5), marker=dict(size=9, color="darkred"),
+            x=mean_x, y=means, mode="markers",
+            marker=dict(size=8, color="steelblue"),
+            error_y=dict(type="data", array=sds, color="steelblue", thickness=2, width=10, visible=True),
+            name="±1 SD", hoverinfo="skip",
+        ))
+        # ±1 SEM error bars (tighter, different color)
+        fig.add_trace(go.Scatter(
+            x=mean_x, y=means, mode="markers",
+            marker=dict(size=8, color="darkorange"),
+            error_y=dict(type="data", array=sems, color="darkorange", thickness=3, width=6, visible=True),
+            name="±1 SEM", hoverinfo="skip",
+        ))
+        # bold dashed mean line drawn last, on top of the error bars
+        fig.add_trace(go.Scatter(
+            x=mean_x, y=means, mode="lines+markers",
+            line=dict(color="black", width=5, dash="dash"), marker=dict(size=9, color="black"),
             name="Mean across labs",
-            text=[f"{ordinal_label(n)}<br>Mean: {mean:.2f}<br>Labs: {len(by_ordinal[n])}"
-                  for n, mean in zip(ordinals, means)],
+            text=[f"{ordinal_label(n)}<br>Mean: {mean:.2f} (±{sd:.2f} SD, ±{sem:.2f} SEM)<br>Labs: {len(by_ordinal[n])}"
+                  for n, mean, sd, sem in zip(ordinals, means, sds, sems)],
             hoverinfo="text",
         ))
 
         fig.update_layout(
-            title=f"Errors at Submission Across a Lab's Successive Submissions (labs with ≥2 datasets, n={len(by_lab)})",
+            title=f"Errors at Submission Across a Lab's Successive Submissions (labs with ≥2 in-window submissions, n={len(by_lab)})",
             xaxis_title="Submission (same award number)",
             yaxis_title="Errors at Submission",
         )
-        fig.update_xaxes(categoryorder="array", categoryarray=categories)
+        fig.update_xaxes(categoryorder="array", categoryarray=categories, showgrid=False)
+        fig.update_yaxes(showgrid=False)
+
+        notes = []
+        if any_shifted:
+            notes.append("Submissions before the April 2022 window are left blank, shifting a lab's later submissions rightward to their true ordinal.")
+        if substitutions:
+            notes.append("A submission whose curation export failed reuses the prior submission's error count (flat segment) and is excluded from the mean.")
+        if notes:
+            fig.add_annotation(
+                text="Note: " + "<br>".join(notes),
+                xref="paper", yref="paper", x=0, y=-0.16, showarrow=False,
+                align="left", font=dict(size=13, color="dimgray"),
+            )
+            fig.update_layout(margin=dict(b=90 + 26 * len(notes)))
         fig.show()
 
     def metric_8_submissions_per_year(temporal_report, event_sequences):
@@ -1884,6 +2011,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         "metric_1c_removed_errors": False,
         "metric_1d_error_type_counts": True,
         "metric_1e_top_error_types": True,
+        "metric_1n_error_ranking_by_template_version": True,
         "metric_1f_resolved_by_publication": True,
         "metric_1j_error_types_subsequent_pub": False,
         "metric_1k_error_type_counts_subsequent_sub": False,
@@ -1937,7 +2065,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         "metric_1m_distinct_errors_sub_vs_pub"
     }
     SOLO_METRICS = {
-        "metric_7c_category_mix_by_event_year"
+        "metric_1i_lab_improvement_across_submissions"
     }
     # for 4f, plot as a histogram; ratio of days with cur touch divided by day sub->pub
     if SOLO_METRICS:
@@ -1953,6 +2081,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         metric_1d_error_type_counts(temporal_report, event_sequences)
     if metric_toggles.get("metric_1e_top_error_types"):
         metric_1e_top_error_types(temporal_report, event_sequences)
+    if metric_toggles.get("metric_1n_error_ranking_by_template_version"):
+        metric_1n_error_ranking_by_template_version(temporal_report, event_sequences)
     if metric_toggles.get("metric_1f_resolved_by_publication"):
         metric_1f_resolved_by_publication(temporal_report, event_sequences)
     if metric_toggles.get("metric_1j_error_types_subsequent_pub"):

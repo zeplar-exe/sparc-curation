@@ -1,6 +1,7 @@
 import csv
 import datetime
 import json
+import sys
 from datetime import timezone
 from collections import Counter, defaultdict
 from report_common import is_excluded_dataset, parse_iso8601, is_excluded_error_type, get_error_type_format, get_error_format_dict_data, get_error_id, get_canonical_title, true_submission_date, true_publication_date, is_excluded_computational, dataset_type, doi_v1, reconciliation_publication_year, nearest_export_key_effective, error_types_near_effective, effective_export_ts_by_key
@@ -11,6 +12,10 @@ BIG_DID = "./big-did.json"
 OUT = "./SPARC_error_results_matrix_table.generated.csv"
 
 FAIL_RADIUS = 5
+
+# pass --exclude-error-columns to drop excluded error types from the columns; the
+# excluded_errors_present count still counts them
+EXCLUDE_ERROR_COLUMNS = "--exclude-error-columns" in sys.argv
 
 # the shared nearest-export logic in report_common keys off the 'updated' timestamp
 TIMESTAMP_MODE = "updated"
@@ -146,8 +151,8 @@ def main():
 
                 if not failed:
                     for message in snapshot:
-                        #if is_excluded_error_type(message):
-                        #    continue
+                        if EXCLUDE_ERROR_COLUMNS and is_excluded_error_type(message):
+                            continue
                         path = message.split(":")[0]
                         # one column per raw message (no collapse); header shows the title, path its own row
                         full = message
