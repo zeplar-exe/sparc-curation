@@ -600,20 +600,3 @@ def error_types_near_effective(dataset_record, event_dt):
         return None
     
     return _positive_error_counts((dataset_record.get("error_graph") or {}).get(key))
-
-
-# + exclude /inputs
-# + exclude entity_dirs/ and specimen_dirs/
-# + graph most common at submission but NOT at publication AFTER filtering
-# + remove 2018, 2019 from time sub to pub
-# / change plotly to not exclude outliers
-    # + add mean and standard deviation to sub to pub graph (annotations)
-# + perhaps sub to pub using the quarters? as a test
-# + perhaps sub to pub using a SEM graph? with the range being within 4 std-dev? as a test
-# + perhaps sub to pub using 95th percentile only?
-    # + put it on the original graph as an annotation?
-    # + and/or a whole other graph?
-# + sub to pub binned by publication year as a separate graph for comparison
-# + bin category mix by publication year as a separate graph for comparison
-# + also improve the names of each graph in curation_report.py
-# + need to report the < 1 day sub->pubs again

@@ -11,9 +11,6 @@ import plotly.graph_objects as go
 import plotly.io as pio
 
 from report_common import (
-    EXCLUDED_DATASET_IDS,
-    WHITELIST_DATASET_IDS,
-    USE_ERROR_INDEX_GRAPH,
     is_excluded_dataset,
     true_submission_date,
     true_publication_date,
@@ -22,19 +19,12 @@ from report_common import (
     parse_iso8601,
     parse_mmddyyyy,
     fiscal_year,
-    is_excluded_error_type,
     get_canonical_title,
     drop_excluded_error_types,
-    last_error_count_at_or_before,
-    last_error_index_at_or_before,
-    error_diff_value_at_or_before,
-    last_error_types_at_or_before,
-    error_types_near,
     error_types_near_effective,
     nearest_export_key_effective,
     effective_after_event,
 )
-from categorize_curator_events import EVENT_MAP
 
 # file-wide plotly styling: bigger fonts on every figure
 pio.templates["report"] = go.layout.Template(
@@ -1585,7 +1575,7 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         df["errors_removed"] = df["at_submission"] - df["at_publication"]
         fig = px.box(
             df, y="errors_removed", points="all", hover_data=["dataset_id", "at_submission", "at_publication"],
-            title="Distinct Errors Removed from Submission to Publication (per Dataset, all)",
+            title="Distinct Errors Types Removed from Submission to Publication (per Dataset, all)",
             labels={"errors_removed": "Errors Removed (Submission − Publication)", "dataset_id": "Dataset ID"},
         )
         fig.show()
@@ -1690,8 +1680,8 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         by_lab = defaultdict(list)
 
         for dataset_id, dataset_record in temporal_report.items():
-            if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, dataset_record, event_sequences):
-                continue
+            #if is_excluded_dataset(dataset_id) or graph_excluded(dataset_id, dataset_record, event_sequences):
+            #    continue
             if not dataset_record.get("error_graph"):
                 continue
 
@@ -1926,8 +1916,6 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         "metric_9b_total_hours_vs_clusters": True,
         "metric_9c_sub_to_pub_vs_curation_hours": True,
     }
-    
-    # + for curator event mix: remove records and models, dataset creation
 
     # ad hoc: run only these metrics without editing the toggles above (empty set to use the toggles as configured)
     SOLO_METRICS = {
@@ -1941,41 +1929,19 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
         "metric_1f_resolved_by_publication",
         "metric_2_time_to_publication",
         "metric_1d_error_type_counts",
-        "metric_7c_category_mix_by_pub_year",
+        "metric_7c_category_mix_by_event_year",
         "metric_1i_lab_improvement_across_submissions",
-        "metric_1j_error_types_subsequent_pub",
-        "metric_1k_error_type_counts_subsequent_sub",
         "metric_4f_curation_touch_days",
         "metric_4c_total_curation_time",
         "metric_1l_total_errors_removed",
         "metric_1m_distinct_errors_sub_vs_pub"
     }
+    SOLO_METRICS = {
+        "metric_7c_category_mix_by_event_year"
+    }
     # for 4f, plot as a histogram; ratio of days with cur touch divided by day sub->pub
     if SOLO_METRICS:
         metric_toggles = {key: key in SOLO_METRICS for key in metric_toggles}
-
-    # + number of days with at least one curation touch | metric_4f_curation_touch_days
-    # + for estimated total curation time scatterplot; rolling average instead of trend line | metric_4c_total_curation_time
-        # + include mean and standard deviation transparent background to the rolling average
-        # + make dots 50% transparent
-    # + set file structure to 75% for all years | metric_7c_category_mix_by_pub_year
-    # + errors most common at submisson | metric_1e_top_error_types
-    # + errors most commonly fixed at publication | metric_1f_resolved_by_publication
-    # + total errors removed (diff) from sub->pub, not over time; all
-    # + box plot of distinct errors per dataset at submission, at publication, not over time; all
-    # + submission errors at subsequent publications
-    
-    # + add rolling average count of day in legend for 4c
-    # add metadata category by Tom slack
-    
-    # + style
-        # + transparent background, light gray grid, black axes, black dots
-        # + box plots can be transparent without fill; outlines stronger color? 
-        # + black and white
-
-    # + use all_datasets_pipeline as ground truth, exclude sample/test and non-SPARC; REVA continue excluding using old exclusion file
-    
-    # for everything relevant, exclude if either sub or pub failed, instead of only if the relevant one failed
 
     if metric_toggles.get("metric_1_standards_adherence"):
         metric_1_standards_adherence(temporal_report, event_sequences, sparcur_updates)
@@ -2050,38 +2016,32 @@ with open(TEMPORAL_REPORT) as f, open(EVENT_SEQUENCES) as g, open(STATUS_DELIMIT
     if metric_toggles.get("metric_9c_sub_to_pub_vs_curation_hours"):
         metric_9c_sub_to_pub_vs_curation_hours(temporal_report, curation_clusters, event_sequences)
 
-
-
-    # + do histogram per year submission, histogram should be binned by year
-    # + add back caption of how many datasets were requested but never published per year
-    # + create json/csv of curation sessions clusters, with dataset id, first request date, publication date, and cluster lengths, ordered by total time "spent curating"
-    # / new graph including all curation intervals, request to reject AND request to publish (AND(?) request to cancel)
-        # / another graph only inluding request to publish/embargo going directly to publish, no rejections
-        
-    # + plotly, try to make the x and y axis on sub->pub graph be equal (1 year is 365 days on x and y)
-    # + new histogram: number of curation clusters by cluster time/length
-    # + new histogram: estimated total curation hours vs number of clusters
-    # + new histogram: time from sub to pub by curation hours
-    # + export generated matrix with human readable error titles from error map instead of techinical descriptions
-        # + need to go through and fix error map error format discrepancies + revert back to old error tagging system
-    # + check the remaining < 5 day sub->pubs and see if they're scaffolds that are being missed for some reason
-    
-    # + matrix, inclusion based on XOR of error existence between sub and pub, one tab/file per dataset
-        # + show only in sub first, then only in pub second
-    # + error matrix transpose based on attached csv; name csvs by dataset id; mark the ones that have higher pub errs vs one with hier req errs
-    
-    # + metric_1 fix using wrong curation export (first instead of last)
-    
     # for publication: change temporal_report.json to use the subset of the curation exports we actually used
     # for publication: change pennsieve event list to anaonymize users and events and dataset uuids + date shifting + dataset titles
-        
-        
-        
-
-
-# I made those extra graphs a while ago to try and characterize whether effectiveness truly goes up
-    # if turnaround is going down, either dead space is going down, efficiency is going up, or both
-    # however, the time spent curating graph does not show that in particular, the time spent curating is mostly flat; three possibilities
-        # 1. pennsieve is completely unreliable for this and its event timestamps are mostly arbitrary
-        # 2. pennsieve is only semi-reliable for this but it can't identify things like life happening and email and admin/bureaucracy
-        # 3. pennsieve is 99% reliable for this and nothing has changed; there's just less dead space during the curation process
+    
+    
+    # instead of tampermonkey, make a Python script to pull from Cassava
+    # standards adherence greapph use set subtraction
+    # standard adherence graph; soda, remove template version markers
+    # add a third standard adherence graph, combined soda and non soda
+    # exclude protocol_url_or_doi missing at the top level (#/) only (but keep #/meta)
+        # dig for examples of this
+    # exclude not valid under any JSON schema (anyOf) at the top level (but keep #/meta)
+    # change subsequent top 10 errors to be at submission not publication
+    # for soda vs non-soda, use N=... for soda and nonsoda
+    # add standard deviation and std error bars to the mean line in lab graph; stdev per each timepoint
+        # two sets of whiskers, plot another trace with 100% dot alpha
+        # mean line should be bold dashed (black?)
+        # per-graph lines should be gray 
+    # note in the methdos section, first submission is first submission with errors
+        # if award number is gone, use publication award number
+        # look throug big did to find any datasets published before 2021/2022 (is our cutoff april or feb?)
+            # from there, we need to include all of those, anything we don't have errors; errors would be none
+            # this can be filtered by using the A8 file to filter for anything whose first submisison is before our data
+    # remove unpublished captions from sub->pub time
+    # use mean AND median on sub->pub boxes (median as dashed, mean as black)
+        # else remove diamonds? frmo sub->pub
+    # total time spent curating graph should be black
+    
+    # b859 goes on the exclude list
+    # re download dataset exclusion list
